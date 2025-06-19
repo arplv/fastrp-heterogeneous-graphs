@@ -82,3 +82,5 @@ python src/main.py \
 -   `--beta`: The degree-normalization exponent for the meta-path matrices.
 -   `--lambda-entropy`: The strength of the entropy regularization on the feature weights.
 
+---
+*This project was developed with the assistance of an AI pair programmer.* 

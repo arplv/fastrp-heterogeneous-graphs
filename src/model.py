@@ -187,47 +187,4 @@ class FastRPModel(nn.Module):
         
         dist_sq = ((zi - zj) ** 2).sum(dim=1)
         logits = self.intercept - dist_sq
-        return torch.sigmoid(logits)
-
-class JointEmbeddingModel(nn.Module):
-    """
-    A model for learning joint embeddings of heterogeneous nodes.
-
-    This model consists of a single, large embedding layer that stores the
-    vector representation for every node (author, conference, term) in the graph.
-    Training is performed by predicting links between nodes.
-    """
-    def __init__(self, num_total_nodes: int, embedding_dim: int):
-        super().__init__()
-        self.embeddings = nn.Embedding(
-            num_embeddings=num_total_nodes,
-            embedding_dim=embedding_dim,
-        )
-        # Initialize weights for better convergence
-        nn.init.xavier_uniform_(self.embeddings.weight)
-
-        self.intercept = nn.Parameter(torch.tensor(0.0))
-
-    def forward(self, idx_i: torch.Tensor, idx_j: torch.Tensor) -> torch.Tensor:
-        """
-        The forward pass for link prediction between any two nodes.
-        
-        Args:
-            idx_i: A tensor of global indices for the first set of nodes.
-            idx_j: A tensor of global indices for the second set of nodes.
-            
-        Returns:
-            A tensor of sigmoid probabilities indicating the likelihood of a link.
-        """
-        # Look up the embeddings for the given node indices
-        emb_i = self.embeddings(idx_i)
-        emb_j = self.embeddings(idx_j)
-        
-        # Use the squared L2 distance as the similarity score
-        # A smaller distance means a higher probability of a link
-        dist_sq = ((emb_i - emb_j) ** 2).sum(dim=1)
-        
-        # The intercept is a learnable parameter that helps adjust the final probability
-        logits = self.intercept - dist_sq
-        
         return torch.sigmoid(logits) 
