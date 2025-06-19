@@ -1,6 +1,5 @@
 import argparse
 import torch
-import numpy as np
 import sys
 from pathlib import Path
 
@@ -8,61 +7,43 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parents[1]
 sys.path.append(str(project_root))
 
-from src.model import FastRPModel
-from src.data_loader import load_data, load_author_mappings
+from src.data_loader import load_author_mappings
 
 def main():
-    parser = argparse.ArgumentParser(description="Predict co-authorship probability between two authors.")
-    parser.add_argument('--checkpoint', type=str, required=True, help='Path to the trained model checkpoint (.pth file).')
-    parser.add_argument('--author1', type=str, required=True, help='Name or ID of the first author.')
-    parser.add_argument('--author2', type=str, required=True, help='Name or ID of the second author.')
+    parser = argparse.ArgumentParser(description="Predict co-authorship probability using pre-computed embeddings.")
+    parser.add_argument('--embeddings-path', type=str, default='author_embeddings.pt', help='Path to the saved author embeddings (.pt file).')
+    parser.add_argument('--checkpoint-path', type=str, default='fastrp_model.pth', help='Path to the model checkpoint to load the intercept.')
+    parser.add_argument('--data-dir', type=str, default='data', help='Path to the data directory to load author names.')
+    parser.add_argument('author1', type=str, help='Name or ID of the first author.')
+    parser.add_argument('author2', type=str, help='Name or ID of the second author.')
     args = parser.parse_args()
 
-    # --- Load Checkpoint and Data ---
-    print(f"Loading checkpoint from {args.checkpoint}...")
-    checkpoint = torch.load(args.checkpoint, map_location=torch.device('cpu'))
-    model_args = checkpoint['args']
+    # --- Load Pre-computed Data ---
+    print(f"Loading embeddings from {args.embeddings_path}...")
+    embeddings = torch.load(args.embeddings_path, map_location='cpu')
     
-    print("Loading data for model initialization...")
-    # The model needs the 'relations' dictionary to be initialized, even if it's on CPU
-    relations, n_authors, _, _ = load_data(model_args['data_dir'])
+    print(f"Loading checkpoint from {args.checkpoint_path} to get model intercept...")
+    checkpoint = torch.load(args.checkpoint_path, map_location='cpu')
+    intercept = checkpoint.get('intercept', 0.0) # Default to 0.0 if not found
     
-    print("Loading author mappings...")
-    id_to_name, name_to_id = load_author_mappings(model_args['data_dir'])
-
-    # --- Initialize Model ---
-    print("Initializing model architecture...")
-    model = FastRPModel(
-        n_authors=n_authors,
-        dim=model_args['dim'],
-        meta_paths=model_args['meta_paths'],
-        relations=relations, # Pass the loaded relations
-        num_powers=model_args['num_powers'],
-        alpha=model_args['alpha'],
-        beta=model_args['beta'],
-    )
-    
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval() # Set model to evaluation mode
-    print("Model loaded successfully.")
+    print(f"Loading author mappings from {args.data_dir}...")
+    id_to_name, name_to_id = load_author_mappings(args.data_dir)
 
     # --- Find Author IDs ---
     def find_author_id(name_or_id):
         try:
-            # First, try to interpret as a (0-based) integer ID
             return int(name_or_id)
         except ValueError:
-            # If that fails, look up by name
             return name_to_id.get(name_or_id.lower())
 
     id1 = find_author_id(args.author1)
     id2 = find_author_id(args.author2)
 
-    if id1 is None:
-        print(f"Error: Author '{args.author1}' not found.")
+    if id1 is None or id1 >= len(embeddings):
+        print(f"Error: Author '{args.author1}' not found or ID out of bounds.")
         sys.exit(1)
-    if id2 is None:
-        print(f"Error: Author '{args.author2}' not found.")
+    if id2 is None or id2 >= len(embeddings):
+        print(f"Error: Author '{args.author2}' not found or ID out of bounds.")
         sys.exit(1)
         
     name1 = id_to_name.get(id1, f"ID:{id1}")
@@ -73,10 +54,12 @@ def main():
     print(f"  - '{name2}' (ID: {id2})")
 
     # --- Predict Probability ---
-    with torch.no_grad():
-        id1_tensor = torch.tensor([id1])
-        id2_tensor = torch.tensor([id2])
-        probability = model(id1_tensor, id2_tensor).item()
+    z1 = embeddings[id1]
+    z2 = embeddings[id2]
+    
+    dist_sq = ((z1 - z2) ** 2).sum()
+    logits = intercept - dist_sq
+    probability = torch.sigmoid(logits).item()
 
     print(f"\\nPredicted probability of co-authorship: {probability:.2%}")
 

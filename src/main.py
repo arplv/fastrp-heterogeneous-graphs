@@ -166,25 +166,27 @@ def main(args):
         recall = recall_score(epoch_labels_np, binary_preds, zero_division=0)
         
         print(f"Epoch {epoch+1}/{args.epochs} | Loss: {avg_loss:.4f} | AUC: {auc:.4f} | Precision: {precision:.4f} | Recall: {recall:.4f}")
-        print(f"  Feature weights (softmaxed): {F.softmax(model.feature_weights, dim=0).detach().cpu().numpy()}")
-        print(f"  Intercept: {model.intercept.item():.4f}")
+        # print(f"  Feature weights (softmaxed): {F.softmax(model.feature_weights.flatten(), dim=0).detach().cpu().numpy()}")
+        # print(f"  Intercept: {model.intercept.item():.4f}")
 
-    # Save embeddings
-    final_embeddings = model.get_embedding().detach().cpu().numpy()
-    np.save(args.output, final_embeddings)
-    print(f"Embeddings saved to {args.output}")
-
-    # Final evaluation on the full dataset
-    model.eval()
-    # Note: A full evaluation might be needed here depending on the task
     print("Training finished.")
+    model.eval()
 
-    # Save the model checkpoint
+    # Save the final embeddings for fast inference
+    if args.output:
+        print(f"Computing and saving final embeddings to {args.output}...")
+        final_embeddings = model.get_embedding().detach().cpu()
+        torch.save(final_embeddings, args.output)
+        print("Embeddings saved.")
+
+    # Save the model checkpoint for potential retraining or inspection
     if args.save_model_path:
         print(f"Saving model checkpoint to {args.save_model_path}...")
+        args_dict = {k: v for k, v in vars(args).items() if k != 'relations'}
         checkpoint = {
-            'args': {k: v for k, v in vars(args).items() if k != 'relations'},
+            'args': args_dict,
             'model_state_dict': model.state_dict(),
+            'intercept': model.intercept.item()
         }
         torch.save(checkpoint, args.save_model_path)
         print("Model saved.")
