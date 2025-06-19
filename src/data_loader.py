@@ -119,13 +119,29 @@ def load_and_preprocess_data(data_dir: str):
     """
     data_path = Path(data_dir)
     
-    # 1. Load node counts
-    n_authors = int(open(data_path / 'author_num.txt').read())
-    n_conferences = int(open(data_path / 'conf_num.txt').read())
-    n_terms = int(open(data_path / 'term_num.txt').read())
-    
+    # 1. Load a few key matrices to infer dimensions
+    # We can't know the shapes ahead of time, so load without shape constraint first
+    # to find the max IDs, which give us the node counts.
+    def get_shape(filepath):
+        rows, cols = [], []
+        with open(filepath, 'r', encoding='latin-1') as f:
+            for line in f:
+                r, c, _ = map(int, line.strip().split())
+                rows.append(r)
+                cols.append(c)
+        return (max(rows), max(cols))
+
+    ac_shape = get_shape(data_path / 'AC.txt')
+    at_shape = get_shape(data_path / 'AT.txt')
+    ct_shape = get_shape(data_path / 'CT.txt')
+    ca_shape = get_shape(data_path / 'CA.txt')
+
+    n_authors = max(ac_shape[0], at_shape[0], ca_shape[1])
+    n_conferences = max(ac_shape[1], ct_shape[0], ca_shape[0])
+    n_terms = max(at_shape[1], ct_shape[1])
+
     total_nodes = n_authors + n_conferences + n_terms
-    print(f"Total nodes: {total_nodes} (Authors: {n_authors}, Conf: {n_conferences}, Terms: {n_terms})")
+    print(f"Inferred counts: {total_nodes} total nodes (Authors: {n_authors}, Conf: {n_conferences}, Terms: {n_terms})")
 
     # 2. Create global ID mappings
     node_offsets = {
@@ -134,7 +150,7 @@ def load_and_preprocess_data(data_dir: str):
         'T': n_authors + n_conferences
     }
 
-    # 3. Load base heterogeneous relation matrices
+    # 3. Load base heterogeneous relation matrices with correct shapes
     relations = {
         'AC': load_sparse_matrix(data_path / 'AC.txt', (n_authors, n_conferences)),
         'AT': load_sparse_matrix(data_path / 'AT.txt', (n_authors, n_terms)),
