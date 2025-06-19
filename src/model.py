@@ -45,109 +45,102 @@ def scipy_to_torch_sparse(matrix: sp.csr_matrix, device: torch.device) -> torch.
 class FastRPModel(nn.Module):
     def __init__(self, n_authors: int, dim: int, meta_paths: List[str], relations: Dict[str, Dict[str, sp.csr_matrix]], num_powers: int, alpha: float, beta: float, device: str = 'cpu'):
         super().__init__()
-        self.n_authors = n_authors
-        self.dim = dim
-        self.meta_paths = meta_paths
-        self.num_powers = num_powers
-        self.beta = beta
         self.device = torch.device(device)
 
-        # Store relations as sparse torch tensors on the specified device
-        # We keep them on CPU because sparse-sparse matmul is not supported on CUDA
-        self.relations = {
-            k1: {k2: scipy_to_torch_sparse(m, 'cpu') for k2, m in v.items()}
-            for k1, v in relations.items()
-        }
-
-        # Create the random projection matrix R' = D^alpha @ R
+        # --- Feature Generation (Pre-computation) ---
+        # This is done once at initialization. All heavy computation happens here.
+        
+        # 1. Create the random projection matrix R' (on CPU)
         aa_degrees = relations['A']['A'].sum(axis=1).A.flatten()
-        s = int(np.sqrt(n_authors))
-        if s == 0: s = 1
+        R_prime_scipy = self._create_random_projection_matrix(n_authors, dim, alpha, aa_degrees)
 
+        # 2. For each meta-path, generate a sequence of feature matrices
+        all_features = []
+        for path_str in meta_paths:
+            # 2a. Compute the full (N x N) sparse meta-path matrix using scipy
+            M = self._compute_meta_path_matrix(path_str, relations)
+            
+            # 2b. Apply degree normalization D^(-beta) * M
+            with np.errstate(divide='ignore'):
+                inv_degree = np.power(M.sum(axis=1).A.flatten(), beta)
+            inv_degree[np.isinf(inv_degree)] = 0
+            D_inv_beta = sp.diags(inv_degree)
+            M_norm = D_inv_beta @ M
+
+            # 2c. Generate feature vectors by iteratively multiplying with M_norm
+            # U_1 = M_norm @ R', U_2 = M_norm @ U_1, ...
+            # These are (N x dim) dense matrices
+            current_U = M_norm @ R_prime_scipy
+            current_U = torch.from_numpy(current_U).float()
+            current_U = F.normalize(current_U, p=2, dim=1)
+            all_features.append(current_U)
+            
+            for _ in range(num_powers - 1):
+                current_U_sp = sp.csr_matrix(current_U.numpy())
+                current_U = M_norm @ current_U_sp
+                current_U = torch.from_numpy(current_U.toarray()).float() if sp.issparse(current_U) else torch.from_numpy(current_U).float()
+                current_U = F.normalize(current_U, p=2, dim=1)
+                all_features.append(current_U)
+
+        # 3. Store the pre-computed features on the target device
+        self.precomputed_features = torch.stack(all_features, dim=0).to(self.device)
+
+        # --- Learnable Parameters ---
+        num_features = len(meta_paths) * num_powers
+        self.feature_weights = nn.Parameter(torch.ones(num_features))
+        self.intercept = nn.Parameter(torch.tensor(0.0))
+
+    def _create_random_projection_matrix(self, n_nodes, dim, alpha, degrees):
+        s = int(np.sqrt(n_nodes))
+        if s == 0: s = 1
         rng = np.random.default_rng(42)
         rows, cols, data = [], [], []
         for j in range(dim):
-            indices = rng.choice(n_authors, size=s, replace=False)
+            indices = rng.choice(n_nodes, size=s, replace=False)
             values = rng.choice([1.0, -1.0], size=s)
             rows.extend(indices)
             cols.extend([j] * s)
             data.extend(values)
-        R = sp.csr_matrix((data, (rows, cols)), shape=(n_authors, dim), dtype=np.float32)
+        R = sp.csr_matrix((data, (rows, cols)), shape=(n_nodes, dim), dtype=np.float32)
 
         if alpha != 0:
             with np.errstate(divide='ignore'):
-                D_alpha = sp.diags(np.power(aa_degrees, alpha))
-            R_prime_scipy = D_alpha @ R
-        else:
-            R_prime_scipy = R
-            
-        self.R_prime = torch.from_numpy(R_prime_scipy.toarray()).float().to('cpu')
+                D_alpha = sp.diags(np.power(degrees, alpha))
+            return D_alpha @ R
+        return R
 
-        num_features = len(self.meta_paths) * self.num_powers
-        self.feature_weights = nn.Parameter(torch.ones(num_features))
-        self.intercept = nn.Parameter(torch.tensor(0.0))
-
-    def _calculate_feature_vector(self, path_str: str) -> torch.Tensor:
-        """Dynamically computes the base feature vector M @ R for a given path."""
-        M_norm = self._get_normalized_path_matrix(path_str)
-        return torch.sparse.mm(M_norm, self.R_prime)
-
-    def _get_normalized_path_matrix(self, path_str: str) -> torch.Tensor:
-        """Parses a path string and computes the normalized adjacency matrix."""
-        # This part remains on the CPU with sparse torch tensors
+    def _compute_meta_path_matrix(self, path_str: str, relations: Dict[str, Dict[str, sp.csr_matrix]]):
+        """Computes a single sparse meta-path matrix using scipy."""
+        print(f"  Computing features for meta-path: {path_str}")
         if '@' in path_str:
             left_str, right_str = path_str.split('@')
             def get_matrix(s):
                 if s.endswith('.T'):
                     mat_key = s[:-2]
-                    return self.relations[mat_key[0]][mat_key[1]].t()
+                    return relations[mat_key[0]][mat_key[1]].T
                 else:
-                    return self.relations[s[0]][s[1]]
+                    return relations[s[0]][s[1]]
             left_mat = get_matrix(left_str)
             right_mat = get_matrix(right_str)
-            M = torch.sparse.mm(left_mat, right_mat.to_dense()).to_sparse()
+            return left_mat @ right_mat
         else:
             parts = list(path_str)
-            M = self.relations[parts[0]][parts[1]]
+            final_mat = relations[parts[0]][parts[1]]
             for i in range(1, len(parts) - 1):
-                M = torch.sparse.mm(M, self.relations[parts[i]][parts[i+1]].to_dense()).to_sparse()
-
-        # Degree normalization D^(-beta) * M
-        with np.errstate(divide='ignore'):
-            sum_dim = 1 if M.shape[0] == self.n_authors else 0
-            degrees = torch.sparse.sum(M, dim=sum_dim).to_dense()
-            inv_degree = np.power(degrees.cpu().numpy(), self.beta)
-        inv_degree[np.isinf(inv_degree)] = 0
-        D_inv_beta = torch.diag(torch.from_numpy(inv_degree).float()).to_sparse().cpu()
-        
-        M_norm = torch.sparse.mm(D_inv_beta, M.cpu().to_dense()).to_sparse()
-        return M_norm.cpu()
+                final_mat = final_mat @ relations[parts[i]][parts[i+1]]
+            return final_mat
 
     def get_embedding(self) -> torch.Tensor:
-        all_features = []
-        for path_str in self.meta_paths:
-            # Iteratively compute projections: M@R, M@(M@R), ...
-            # All computations are done on the fly on the CPU
-            M_norm = self._get_normalized_path_matrix(path_str)
-            current_U = torch.sparse.mm(M_norm, self.R_prime)
-            current_U = F.normalize(current_U, p=2, dim=1)
-            all_features.append(current_U)
-            
-            for _ in range(self.num_powers - 1):
-                current_U = torch.sparse.mm(M_norm, current_U)
-                current_U = F.normalize(current_U, p=2, dim=1)
-                all_features.append(current_U)
-
-        stacked_features = torch.stack(all_features, dim=0).to(self.device)
-        weights = F.softmax(self.feature_weights, dim=0).to(self.device)
-        
-        embedding = torch.einsum('f,fad->ad', weights, stacked_features)
+        """Computes the final embedding using the pre-computed features."""
+        weights = F.softmax(self.feature_weights, dim=0)
+        embedding = torch.einsum('f,fad->ad', weights, self.precomputed_features)
         return embedding
 
     def forward(self, idx_i: torch.Tensor, idx_j: torch.Tensor) -> torch.Tensor:
         emb = self.get_embedding()
-        zi = emb[idx_i]
-        zj = emb[idx_j]
+        # Move indices to the model's device
+        zi = emb[idx_i.to(self.device)]
+        zj = emb[idx_j.to(self.device)]
         
         dist_sq = ((zi - zj) ** 2).sum(dim=1)
         logits = self.intercept - dist_sq
