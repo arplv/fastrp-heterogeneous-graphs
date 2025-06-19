@@ -1,1 +1,5 @@
- 
+numpy
+scipy
+scikit-learn
+tqdm
+torch --index-url https://download.pytorch.org/whl/cu121 
