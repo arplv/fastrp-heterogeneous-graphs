@@ -55,7 +55,7 @@ class FastRPModel(nn.Module):
         R_prime_scipy = self._create_random_projection_matrix(n_authors, dim, alpha, aa_degrees)
 
         # 2. For each meta-path, generate a sequence of feature matrices
-        all_features = []
+        all_path_features = []
         for path_str in meta_paths:
             # 2a. Compute the full (N x N) sparse meta-path matrix using scipy
             M = self._compute_meta_path_matrix(path_str, relations)
@@ -67,27 +67,37 @@ class FastRPModel(nn.Module):
             D_inv_beta = sp.diags(inv_degree)
             M_norm = D_inv_beta @ M
 
-            # 2c. Generate feature vectors by iteratively multiplying with M_norm
-            # U_1 = M_norm @ R', U_2 = M_norm @ U_1, ...
-            # These are (N x dim) dense matrices
+            # 2c. Compute the feature matrix U = M_norm @ R'
+            # This results in a dense matrix of shape (n_authors, dim)
             current_U = M_norm @ R_prime_scipy
-            current_U = torch.from_numpy(current_U).float()
-            current_U = F.normalize(current_U, p=2, dim=1)
-            all_features.append(current_U)
             
+            # Convert to dense tensor and normalize
+            current_U_tensor = torch.from_numpy(current_U.toarray()).float()
+            current_U_tensor = F.normalize(current_U_tensor, p=2, dim=1)
+            
+            path_features = [current_U_tensor]
+            
+            # 2c. Compute powers of the feature matrix: U_2 = M_norm @ U, U_3 = M_norm @ U_2 ...
+            # Note: current_U is a numpy array for the loop
+            current_U_numpy = current_U.toarray()
             for _ in range(num_powers - 1):
-                current_U_sp = sp.csr_matrix(current_U.numpy())
-                current_U = M_norm @ current_U_sp
-                current_U = torch.from_numpy(current_U.toarray()).float() if sp.issparse(current_U) else torch.from_numpy(current_U).float()
-                current_U = F.normalize(current_U, p=2, dim=1)
-                all_features.append(current_U)
+                # This mat-mat product is the expensive step for powers
+                current_U_numpy = M_norm @ current_U_numpy
+                
+                # Convert to tensor and normalize
+                current_U_tensor = torch.from_numpy(current_U_numpy).float()
+                current_U_tensor = F.normalize(current_U_tensor, p=2, dim=1)
+                
+                path_features.append(current_U_tensor)
+            
+            all_path_features.append(torch.stack(path_features, dim=0))
 
-        # 3. Store the pre-computed features on the target device
-        self.precomputed_features = torch.stack(all_features, dim=0).to(self.device)
+        # 3. Store the pre-computed features (on CPU for now)
+        #    Shape: (num_meta_paths, num_powers, n_authors, dim)
+        self.precomputed_features = torch.stack(all_path_features, dim=0)
 
-        # --- Learnable Parameters ---
-        num_features = len(meta_paths) * num_powers
-        self.feature_weights = nn.Parameter(torch.ones(num_features))
+        # --- Learnable Parameters (on target device) ---
+        self.feature_weights = nn.Parameter(torch.ones(self.precomputed_features.shape[0], self.precomputed_features.shape[1]))
         self.intercept = nn.Parameter(torch.tensor(0.0))
 
     def _create_random_projection_matrix(self, n_nodes, dim, alpha, degrees):
