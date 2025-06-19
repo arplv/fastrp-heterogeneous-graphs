@@ -178,11 +178,13 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="FastRP for Heterogeneous Graphs")
     parser.add_argument('--data-dir', type=str, default='data', help='Directory containing the dataset')
-    parser.add_argument('--meta-paths', type=str, nargs='+', default=['AAA', 'ACA', 'ATCA', 'ACTA'], help='Meta-paths to use for feature generation.')
-    parser.add_argument('--dim', type=int, default=64, help='Embedding dimension')
-    parser.add_argument('--num-powers', type=int, default=3, help='Number of matrix powers to use (q)')
-    parser.add_argument('--alpha', type=float, default=-0.5, help='Exponent for degree weighting of projection matrix')
-    parser.add_argument('--beta', type=float, default=-0.5, help='Exponent for degree normalization of meta-path matrix')
+    parser.add_argument('--meta-paths', type=str, nargs='+', 
+                        default=['AAA', 'ACA', 'ATA', 'ACA@ATA'], 
+                        help='List of meta-paths to use for feature generation.')
+    parser.add_argument('--dim', type=int, default=128, help='Embedding dimension.')
+    parser.add_argument('--num-powers', type=int, default=2, help='Number of matrix powers to use for each meta-path feature.')
+    parser.add_argument('--alpha', type=float, default=-0.5, help='Exponent for degree weighting of the random projection matrix.')
+    parser.add_argument('--beta', type=float, default=-1.0, help='Exponent for degree normalization of the meta-path matrix.')
     parser.add_argument('--epochs', type=int, default=30, help='Number of training epochs.')
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate.')
     parser.add_argument('--entropy-beta', type=float, default=0.05, help='Coefficient for entropy regularization term.')
