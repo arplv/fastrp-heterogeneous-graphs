@@ -30,13 +30,24 @@ def load_author_mappings(data_dir: Union[str, Path]):
     data_dir = Path(data_dir)
     id_to_name = {}
     name_to_id = {}
-    # The file is author_dict.txt, and it contains one name per line.
+    # The file author_dict.txt contains one "ID\tName" per line.
     # The 0-based line number corresponds to the author's internal ID.
     with open(data_dir / 'author_dict.txt', 'r', encoding='latin-1') as f:
         for i, line in enumerate(f):
-            author_name = line.strip()
-            id_to_name[i] = author_name
-            name_to_id[author_name.lower()] = i
+            try:
+                # Split the line by tab and take the second part (the name)
+                parts = line.strip().split('\t', 1)
+                if len(parts) == 2:
+                    author_name = parts[1]
+                else:
+                    # Fallback for lines that might not have a tab
+                    author_name = parts[0]
+                
+                id_to_name[i] = author_name
+                name_to_id[author_name.lower()] = i
+            except IndexError:
+                # Handle empty or malformed lines
+                continue
     return id_to_name, name_to_id
 
 def load_data(data_dir: Union[str, Path] = 'data'):
