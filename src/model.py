@@ -120,24 +120,40 @@ class FastRPModel(nn.Module):
         return R
 
     def _compute_meta_path_matrix(self, path_str: str, relations: Dict[str, Dict[str, sp.csr_matrix]]):
-        """Computes a single sparse meta-path matrix using scipy."""
+        """
+        Computes a single sparse meta-path matrix using scipy.
+        This function is recursive to handle composite paths defined with '@'.
+        """
         print(f"  Computing features for meta-path: {path_str}")
+        
         if '@' in path_str:
-            left_str, right_str = path_str.split('@')
-            def get_matrix(s):
-                if s.endswith('.T'):
-                    mat_key = s[:-2]
-                    return relations[mat_key[0]][mat_key[1]].T
-                else:
-                    return relations[s[0]][s[1]]
-            left_mat = get_matrix(left_str)
-            right_mat = get_matrix(right_str)
-            return left_mat @ right_mat
+            # This is a composite path, e.g., 'ACA@ATA'
+            # The '@' symbol denotes ELEMENT-WISE multiplication (Hadamard product)
+            left_str, right_str = path_str.split('@', 1)
+            
+            # Recursively compute the matrices for the left and right paths
+            left_mat = self._compute_meta_path_matrix(left_str, relations)
+            right_mat = self._compute_meta_path_matrix(right_str, relations)
+
+            # Element-wise product requires shapes to be identical
+            if left_mat.shape != right_mat.shape:
+                raise ValueError(f"Shape mismatch for element-wise product in '{path_str}': {left_mat.shape} vs {right_mat.shape}")
+
+            # Use .multiply() for element-wise product of sparse matrices
+            return left_mat.multiply(right_mat)
         else:
+            # This is a standard path, e.g., 'ACA'
             parts = list(path_str)
-            final_mat = relations[parts[0]][parts[1]]
+            
+            # Initialize with the first relation in the path
+            # Use .copy() to avoid modifying the original relation matrix in the dictionary
+            final_mat = relations[parts[0]][parts[1]].copy()
+            
+            # Chain matrix multiplications for the rest of the path
             for i in range(1, len(parts) - 1):
-                final_mat = final_mat @ relations[parts[i]][parts[i+1]]
+                next_mat = relations[parts[i]][parts[i+1]]
+                final_mat = final_mat @ next_mat
+            
             return final_mat
 
     def get_embedding(self) -> torch.Tensor:
