@@ -141,9 +141,26 @@ class FastRPModel(nn.Module):
             return final_mat
 
     def get_embedding(self) -> torch.Tensor:
-        """Computes the final embedding using the pre-computed features."""
-        weights = F.softmax(self.feature_weights, dim=0)
-        embedding = torch.einsum('f,fad->ad', weights, self.precomputed_features)
+        """
+        Computes the final embedding by taking a weighted average of all pre-computed features.
+        The weights are learned during training.
+        """
+        # Ensure features are on the correct device for the einsum operation
+        features = self.precomputed_features.to(self.device)
+        
+        # Softmax over the flattened weights to get a single probability distribution
+        weights = F.softmax(self.feature_weights.flatten(), dim=0)
+
+        # Reshape features to combine meta-path and power dimensions
+        # Original shape: (num_paths, num_powers, n_authors, dim)
+        # New shape: (num_features, n_authors, dim) where num_features = num_paths * num_powers
+        num_features = features.shape[0] * features.shape[1]
+        features_flat = features.view(num_features, features.shape[2], features.shape[3])
+        
+        # Weighted sum. 'f,fad->ad' means:
+        # Multiply a 1D weight vector (f) with a 3D feature tensor (fad)
+        # and sum along the 'f' dimension, resulting in a 2D embedding (ad).
+        embedding = torch.einsum('f,fad->ad', weights, features_flat)
         return embedding
 
     def forward(self, idx_i: torch.Tensor, idx_j: torch.Tensor) -> torch.Tensor:
