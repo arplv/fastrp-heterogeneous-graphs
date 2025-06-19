@@ -248,11 +248,10 @@ def main(args):
             
             # 2. Entropy regularization to encourage diverse weights
             weights_softmax = F.softmax(model.feature_weights, dim=0)
-            entropy = -torch.sum(weights_softmax * torch.log(weights_softmax + 1e-8)) # Add 1e-8 for stability
+            entropy = -torch.sum(weights_softmax * torch.log(weights_softmax + 1e-7))
             
             # 3. Combined loss
-            # We want to MAXIMIZE entropy, so we MINIMIZE negative entropy
-            loss = bce_loss - args.lambda_entropy * entropy
+            loss = bce_loss - args.entropy_beta * entropy
             
             loss.backward()
             optimizer.step()
@@ -284,15 +283,15 @@ if __name__ == '__main__':
     parser.add_argument('--num-powers', type=int, default=3, help='Number of matrix powers to use (q)')
     parser.add_argument('--alpha', type=float, default=-0.5, help='Exponent for degree weighting of projection matrix')
     parser.add_argument('--beta', type=float, default=-0.5, help='Exponent for degree normalization of meta-path matrix')
-    parser.add_argument('--epochs', type=int, default=30, help='Number of training epochs')
-    parser.add_argument('--lr', type=float, default=0.01, help='Learning rate')
-    parser.add_argument('--lambda-entropy', type=float, default=0.01, help='Strength of the entropy regularization for feature weights')
-    parser.add_argument('--neg-samples', type=int, default=5, help='Number of negative samples per positive pair')
+    parser.add_argument('--epochs', type=int, default=30, help='Number of training epochs.')
+    parser.add_argument('--lr', type=float, default=0.01, help='Learning rate.')
+    parser.add_argument('--entropy-beta', type=float, default=0.05, help='Coefficient for entropy regularization term.')
+    parser.add_argument('--neg-samples', type=int, default=3, help='Number of negative samples per positive sample.')
     parser.add_argument('--batch-size', type=int, default=4096, help='Training batch size')
-    parser.add_argument('--device', type=str, default='auto', help='Device to use for training (auto, cpu, mps, cuda)')
+    parser.add_argument('--device', type=str, default='auto', help='Device to use for training (e.g., "cpu", "cuda", "mps", "auto").')
     parser.add_argument('--output', type=str, default='author_embeddings.npy', help='Path to save final embeddings')
-    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
-    parser.add_argument('--cache-dir', type=str, default='matrix_cache', help='Directory to cache computed meta-path matrices')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility.')
+    parser.add_argument('--cache-dir', type=str, default='./matrix_cache', help='Directory to cache computed meta-path matrices.')
     
     args = parser.parse_args()
     main(args) 
