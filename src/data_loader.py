@@ -3,6 +3,14 @@ import numpy as np
 import scipy.sparse as sp
 from typing import Union, Dict, Tuple, List
 
+# Attempt to import CuPy and set a flag
+try:
+    import cupy as cp
+    import cupyx.scipy.sparse as cupy_sparse
+    CUPY_AVAILABLE = True
+except ImportError:
+    CUPY_AVAILABLE = False
+
 def load_dictionary(path: Path):
     """Loads a dictionary from a file (one item per line)."""
     with open(path, 'r', encoding='latin-1') as f:
@@ -91,19 +99,17 @@ def load_sparse_matrix(filepath: Path, shape: Tuple[int, int]) -> sp.csr_matrix:
             data.append(w)
     return sp.csr_matrix((data, (rows, cols)), shape=shape, dtype=np.float32)
 
-def compute_meta_path_matrix(path_str: str, relations: Dict[str, sp.csr_matrix]):
+def _compute_meta_path_matrix(path_str: str, relations: Dict, mat_lib, sparse_lib):
     """
-    Computes a single sparse meta-path matrix using scipy.
-    Handles both standard paths (e.g., 'ACA') and composite paths ('ACA@ATA').
+    Generic meta-path computation function.
+    Can be used with either scipy on CPU or cupy on GPU.
     """
-    print(f"  Computing adjacency matrix for: {path_str}")
-    
     if '@' in path_str:
         left_str, right_str = path_str.split('@', 1)
-        left_mat = compute_meta_path_matrix(left_str, relations)
-        right_mat = compute_meta_path_matrix(right_str, relations)
+        left_mat = _compute_meta_path_matrix(left_str, relations, mat_lib, sparse_lib)
+        right_mat = _compute_meta_path_matrix(right_str, relations, mat_lib, sparse_lib)
         if left_mat.shape != right_mat.shape:
-            raise ValueError(f"Shape mismatch for element-wise product in '{path_str}': {left_mat.shape} vs {right_mat.shape}")
+            raise ValueError(f"Shape mismatch for element-wise product: {left_mat.shape} vs {right_mat.shape}")
         return left_mat.multiply(right_mat)
     else:
         parts = list(path_str)
@@ -113,10 +119,21 @@ def compute_meta_path_matrix(path_str: str, relations: Dict[str, sp.csr_matrix])
             final_mat = final_mat @ next_mat
         return final_mat
 
-def load_and_preprocess_data(data_dir: str):
+def load_and_preprocess_data(data_dir: str, use_gpu: bool):
     """
     Loads all data, creates a global mapping, and computes all necessary adjacency matrices.
+    Will use CuPy for GPU acceleration if available and requested.
     """
+    use_gpu = use_gpu and CUPY_AVAILABLE
+    if use_gpu:
+        print("CuPy available, using GPU for pre-computation.")
+        mat_lib = cp
+        sparse_lib = cupy_sparse
+    else:
+        print("CuPy not available or GPU not requested, using CPU for pre-computation.")
+        mat_lib = np
+        sparse_lib = sp
+
     data_path = Path(data_dir)
     
     # 1. Infer dimensions by reading max IDs from the files that actually exist.
@@ -154,30 +171,38 @@ def load_and_preprocess_data(data_dir: str):
     at_mat = load_sparse_matrix(data_path / 'AT.txt', (n_authors, n_terms))
     ct_mat = load_sparse_matrix(data_path / 'CT.txt', (n_conferences, n_terms))
 
-    relations = {
-        'CA': ca_mat,
-        'AC': ca_mat.T,
-        'AT': at_mat,
-        'TA': at_mat.T,
-        'CT': ct_mat,
-        'TC': ct_mat.T,
+    relations_cpu = {
+        'CA': ca_mat, 'AC': ca_mat.T,
+        'AT': at_mat, 'TA': at_mat.T,
+        'CT': ct_mat, 'TC': ct_mat.T,
     }
+
+    # If using GPU, convert base matrices to cupy
+    if use_gpu:
+        relations = {k: sparse_lib.csr_matrix(v) for k, v in relations_cpu.items()}
+    else:
+        relations = relations_cpu
+
+    # We need A-A for evaluation, compute it on the appropriate device
+    relations['AA'] = relations['AC'] @ relations['CA']
 
     # 4. Compute all homogeneous adjacency matrices from specified meta-paths
     author_meta_paths = ['AAA', 'ACA', 'ATA']
     conf_meta_paths = ['CAC', 'CTC', 'CATAC']
     term_meta_paths = ['TAT', 'TCT']
-
-    # We need A-A for evaluation, let's derive it from C-A co-occurrence
-    relations['AA'] = relations['AC'] @ relations['CA']
     
-    adj_matrices = {
-        'A': [compute_meta_path_matrix(p, relations) for p in author_meta_paths],
-        'C': [compute_meta_path_matrix(p, relations) for p in conf_meta_paths],
-        'T': [compute_meta_path_matrix(p, relations) for p in term_meta_paths]
-    }
+    adj_matrices = {}
+    for node_type, paths in [('A', author_meta_paths), ('C', conf_meta_paths), ('T', term_meta_paths)]:
+        print(f"--- Computing Adjacency Matrices for node type: {node_type} ---")
+        adj_matrices[node_type] = [_compute_meta_path_matrix(p, relations, mat_lib, sparse_lib) for p in paths]
 
-    return total_nodes, n_authors, node_offsets, adj_matrices, relations
+    # If we used the GPU, we need to bring the final results back to the CPU for the sampler
+    # The base relations_cpu dict is used for the evaluation part which runs on CPU
+    if use_gpu:
+        for node_type in adj_matrices:
+            adj_matrices[node_type] = [m.get() for m in adj_matrices[node_type]]
+
+    return total_nodes, n_authors, node_offsets, adj_matrices, relations_cpu
 
 def get_training_pairs(adj: sp.csr_matrix, offset: int, num_neg_samples: int):
     """Generates positive and negative training pairs with global offsets."""

@@ -17,7 +17,10 @@ def main(args):
     print(f"Using device: {device}")
 
     # Load and process data
-    total_nodes, n_authors, node_offsets, adj_matrices, relations = load_and_preprocess_data(args.data_dir)
+    total_nodes, n_authors, node_offsets, adj_matrices, relations = load_and_preprocess_data(
+        args.data_dir, 
+        use_gpu=(device.type == 'cuda')
+    )
 
     # Initialize model
     model = JointEmbeddingModel(
