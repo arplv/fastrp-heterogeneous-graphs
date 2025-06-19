@@ -1,0 +1,13 @@
+# Cache directories
+matrix_cache/
+.venv/
+__pycache__/
+
+# Python bytecode
+*.pyc
+
+# OS-specific
+.DS_Store
+
+# Embeddings output
+*.npy 
