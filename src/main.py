@@ -4,7 +4,7 @@ import scipy.sparse as sp
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import roc_auc_score, precision_score, recall_score
 from pathlib import Path
 from tqdm import tqdm
 from numba import njit
@@ -207,20 +207,16 @@ def main(args):
     print(f"Using cache directory: {cache_dir.resolve()}")
 
     # Load data
+    print("Loading data...")
     relations, n_authors, _, _ = load_data(args.data_dir)
-    
-    # Compute base meta-path matrices
-    print("Computing base meta-path matrices...")
-    meta_path_matrices = {}
-    for path_str in args.meta_paths:
-        meta_path_matrices[path_str] = parse_meta_path(path_str, relations)
-        print(f"    - Computed {path_str}: {meta_path_matrices[path_str].nnz} non-zero entries")
+    print("Data loading complete.")
 
     # Create model
     model = FastRPModel(
         n_authors=n_authors,
         dim=args.dim,
-        meta_paths=meta_path_matrices,
+        meta_paths=args.meta_paths,
+        relations=relations,
         num_powers=args.num_powers,
         alpha=args.alpha,
         beta=args.beta,
@@ -284,9 +280,16 @@ def main(args):
         avg_loss = epoch_loss / len(train_pairs)
         
         # Evaluation
-        auc = roc_auc_score(epoch_labels, epoch_preds)
+        epoch_labels_np = np.array(epoch_labels)
+        epoch_preds_np = np.array(epoch_preds)
+        auc = roc_auc_score(epoch_labels_np, epoch_preds_np)
         
-        print(f"Epoch {epoch+1}/{args.epochs} | Loss: {avg_loss:.4f} | AUC: {auc:.4f}")
+        # Convert predictions to binary (0 or 1) for precision/recall
+        binary_preds = (epoch_preds_np > 0.5).astype(int)
+        precision = precision_score(epoch_labels_np, binary_preds, zero_division=0)
+        recall = recall_score(epoch_labels_np, binary_preds, zero_division=0)
+        
+        print(f"Epoch {epoch+1}/{args.epochs} | Loss: {avg_loss:.4f} | AUC: {auc:.4f} | Precision: {precision:.4f} | Recall: {recall:.4f}")
         print(f"  Feature weights (softmaxed): {F.softmax(model.feature_weights, dim=0).detach().cpu().numpy()}")
         print(f"  Intercept: {model.intercept.item():.4f}")
 
@@ -299,7 +302,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="FastRP for Heterogeneous Graphs")
     parser.add_argument('--data-dir', type=str, default='data', help='Directory containing the dataset')
-    parser.add_argument('--meta-paths', type=str, nargs='+', default=['AAA', 'ATA', 'ACA', 'AT@AT.T'], help='Meta-paths to use. Supports standard paths (e.g., ACA) and product paths (e.g., AT@AT.T)')
+    parser.add_argument('--meta-paths', type=str, nargs='+', default=['AAA', 'ACA', 'ATCA', 'ACTA'], help='Meta-paths to use for feature generation.')
     parser.add_argument('--dim', type=int, default=64, help='Embedding dimension')
     parser.add_argument('--num-powers', type=int, default=3, help='Number of matrix powers to use (q)')
     parser.add_argument('--alpha', type=float, default=-0.5, help='Exponent for degree weighting of projection matrix')

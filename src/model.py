@@ -32,78 +32,123 @@ def create_random_projection_matrix(n_nodes: int, dim: int, alpha: float, degree
     
     return R
 
+def scipy_to_torch_sparse(matrix: sp.csr_matrix, device: torch.device) -> torch.Tensor:
+    """Converts a Scipy sparse matrix to a PyTorch sparse COO tensor."""
+    coo = matrix.tocoo()
+    values = coo.data
+    indices = np.vstack((coo.row, coo.col))
+    i = torch.LongTensor(indices)
+    v = torch.FloatTensor(values)
+    shape = coo.shape
+    return torch.sparse_coo_tensor(i, v, torch.Size(shape), device=device)
+
 class FastRPModel(nn.Module):
-    def __init__(self, n_authors: int, dim: int, meta_paths: Dict[str, sp.csr_matrix], num_powers: int, alpha: float = 0.0, beta: float = -0.5, device: str = 'cpu'):
+    def __init__(self, n_authors: int, dim: int, meta_paths: List[str], relations: Dict[str, Dict[str, sp.csr_matrix]], num_powers: int, alpha: float, beta: float, device: str = 'cpu'):
         super().__init__()
         self.n_authors = n_authors
         self.dim = dim
-        self.meta_path_names = list(meta_paths.keys())
+        self.meta_paths = meta_paths
         self.num_powers = num_powers
+        self.beta = beta
         self.device = torch.device(device)
 
-        # 1. Pre-process and store meta-path matrices
-        self.processed_matrices = {}
-        for name, M in meta_paths.items():
-            # Degree normalization: D^(-beta) * M
-            with np.errstate(divide='ignore'):
-                inv_degree = np.power(M.sum(axis=1).A.flatten(), beta) # beta is now the exponent directly
-            inv_degree[np.isinf(inv_degree)] = 0
-            D_inv_beta = sp.diags(inv_degree)
-            M_norm = D_inv_beta @ M
-            self.processed_matrices[name] = torch.from_numpy(M_norm.toarray()).float().to(self.device)
+        # Store relations as sparse torch tensors on the specified device
+        # We keep them on CPU because sparse-sparse matmul is not supported on CUDA
+        self.relations = {
+            k1: {k2: scipy_to_torch_sparse(m, 'cpu') for k2, m in v.items()}
+            for k1, v in relations.items()
+        }
 
-        # 2. Create the random projection matrix R' = D^alpha @ R
-        # Use the degrees from the base Author-Author matrix for the alpha weighting
-        aa_degrees = meta_paths['AAA'].sum(axis=1).A.flatten()
+        # Create the random projection matrix R' = D^alpha @ R
+        aa_degrees = relations['A']['A'].sum(axis=1).A.flatten()
         s = int(np.sqrt(n_authors))
         if s == 0: s = 1
-        R_prime_scipy = create_random_projection_matrix(n_authors, dim, alpha=alpha, degrees=aa_degrees, s=s)
-        self.R_prime = torch.from_numpy(R_prime_scipy.toarray()).float().to(self.device)
 
-        # 3. Learnable weights for combining all generated features
-        # (num_meta_paths * num_powers)
-        num_features = len(self.meta_path_names) * self.num_powers
-        self.feature_weights = nn.Parameter(torch.ones(num_features, device=self.device))
+        rng = np.random.default_rng(42)
+        rows, cols, data = [], [], [], []
+        for j in range(dim):
+            indices = rng.choice(n_authors, size=s, replace=False)
+            values = rng.choice([1.0, -1.0], size=s)
+            rows.extend(indices)
+            cols.extend([j] * s)
+            data.extend(values)
+        R = sp.csr_matrix((data, (rows, cols)), shape=(n_authors, dim), dtype=np.float32)
 
-        # 4. Barbera-style latent space model parameters
-        self.intercept = nn.Parameter(torch.tensor(0.0, device=self.device))
+        if alpha != 0:
+            with np.errstate(divide='ignore'):
+                D_alpha = sp.diags(np.power(aa_degrees, alpha))
+            R_prime_scipy = D_alpha @ R
+        else:
+            R_prime_scipy = R
+            
+        self.R_prime = torch.from_numpy(R_prime_scipy.toarray()).float().to('cpu')
+
+        num_features = len(self.meta_paths) * self.num_powers
+        self.feature_weights = nn.Parameter(torch.ones(num_features))
+        self.intercept = nn.Parameter(torch.tensor(0.0))
+
+    def _calculate_feature_vector(self, path_str: str) -> torch.Tensor:
+        """Dynamically computes the base feature vector M @ R for a given path."""
+        M_norm = self._get_normalized_path_matrix(path_str)
+        return torch.sparse.mm(M_norm, self.R_prime)
+
+    def _get_normalized_path_matrix(self, path_str: str) -> sp.csr_matrix:
+        """Parses a path string and computes the normalized adjacency matrix."""
+        # This part remains on the CPU with sparse torch tensors
+        if '@' in path_str:
+            left_str, right_str = path_str.split('@')
+            def get_matrix(s):
+                if s.endswith('.T'):
+                    mat_key = s[:-2]
+                    return self.relations[mat_key[0]][mat_key[1]].t()
+                else:
+                    return self.relations[s[0]][s[1]]
+            left_mat = get_matrix(left_str)
+            right_mat = get_matrix(right_str)
+            M = torch.sparse.mm(left_mat, right_mat.to_dense()).to_sparse()
+        else:
+            parts = list(path_str)
+            M = self.relations[parts[0]][parts[1]]
+            for i in range(1, len(parts) - 1):
+                M = torch.sparse.mm(M, self.relations[parts[i]][parts[i+1]].to_dense()).to_sparse()
+
+        # Degree normalization D^(-beta) * M
+        with np.errstate(divide='ignore'):
+            sum_dim = 1 if M.shape[0] == self.n_authors else 0
+            degrees = torch.sparse.sum(M, dim=sum_dim).to_dense()
+            inv_degree = np.power(degrees.cpu().numpy(), self.beta)
+        inv_degree[np.isinf(inv_degree)] = 0
+        D_inv_beta = torch.diag(torch.from_numpy(inv_degree).float()).to_sparse()
+        
+        M_norm = torch.sparse.mm(D_inv_beta, M.to_dense()).to_sparse()
+        return M_norm.cpu()
 
     def get_embedding(self) -> torch.Tensor:
-        """
-        Computes the final embedding by generating features on the fly and combining them.
-        """
         all_features = []
-        
-        for name in self.meta_path_names:
-            M_norm = self.processed_matrices[name]
-            
+        for path_str in self.meta_paths:
             # Iteratively compute projections: M@R, M@(M@R), ...
-            # This is the key insight from the reference code.
-            current_U = F.normalize(M_norm @ self.R_prime, p=2, dim=1)
+            # All computations are done on the fly on the CPU
+            M_norm = self._get_normalized_path_matrix(path_str)
+            current_U = torch.sparse.mm(M_norm, self.R_prime)
+            current_U = F.normalize(current_U, p=2, dim=1)
             all_features.append(current_U)
             
             for _ in range(self.num_powers - 1):
-                current_U = F.normalize(M_norm @ current_U, p=2, dim=1)
+                current_U = torch.sparse.mm(M_norm, current_U)
+                current_U = F.normalize(current_U, p=2, dim=1)
                 all_features.append(current_U)
 
-        # Stack all features: (num_features, n_authors, dim)
-        stacked_features = torch.stack(all_features, dim=0)
+        stacked_features = torch.stack(all_features, dim=0).to(self.device)
+        weights = F.softmax(self.feature_weights, dim=0).to(self.device)
         
-        # Get learned weights, normalized with softmax
-        weights = F.softmax(self.feature_weights, dim=0)
-        
-        # Weighted sum of all features
         embedding = torch.einsum('f,fad->ad', weights, stacked_features)
         return embedding
 
     def forward(self, idx_i: torch.Tensor, idx_j: torch.Tensor) -> torch.Tensor:
-        """
-        Predicts the probability of a link between nodes i and j.
-        """
         emb = self.get_embedding()
-        zi = emb[idx_i.to(self.device)]
-        zj = emb[idx_j.to(self.device)]
+        zi = emb[idx_i]
+        zj = emb[idx_j]
         
         dist_sq = ((zi - zj) ** 2).sum(dim=1)
-        logits = self.intercept - dist_sq
+        logits = self.intercept.to(self.device) - dist_sq
         return torch.sigmoid(logits) 
