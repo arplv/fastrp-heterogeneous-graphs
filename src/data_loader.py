@@ -119,25 +119,24 @@ def load_and_preprocess_data(data_dir: str):
     """
     data_path = Path(data_dir)
     
-    # 1. Load a few key matrices to infer dimensions
-    # We can't know the shapes ahead of time, so load without shape constraint first
-    # to find the max IDs, which give us the node counts.
+    # 1. Infer dimensions by reading max IDs from the files that actually exist.
     def get_shape(filepath):
         rows, cols = [], []
+        if not filepath.exists(): return (0, 0)
         with open(filepath, 'r', encoding='latin-1') as f:
             for line in f:
                 r, c, _ = map(int, line.strip().split())
                 rows.append(r)
                 cols.append(c)
-        return (max(rows), max(cols))
+        return (max(rows) if rows else 0, max(cols) if cols else 0)
 
-    ac_shape = get_shape(data_path / 'AC.txt')
+    # Infer dimensions from existing files
+    ca_shape = get_shape(data_path / 'CA.txt')
     at_shape = get_shape(data_path / 'AT.txt')
     ct_shape = get_shape(data_path / 'CT.txt')
-    ca_shape = get_shape(data_path / 'CA.txt')
 
-    n_authors = max(ac_shape[0], at_shape[0], ca_shape[1])
-    n_conferences = max(ac_shape[1], ct_shape[0], ca_shape[0])
+    n_authors = max(ca_shape[1], at_shape[0])
+    n_conferences = max(ca_shape[0], ct_shape[0])
     n_terms = max(at_shape[1], ct_shape[1])
 
     total_nodes = n_authors + n_conferences + n_terms
@@ -150,15 +149,19 @@ def load_and_preprocess_data(data_dir: str):
         'T': n_authors + n_conferences
     }
 
-    # 3. Load base heterogeneous relation matrices with correct shapes
+    # 3. Load from existing files and create others via transpose
+    ca_mat = load_sparse_matrix(data_path / 'CA.txt', (n_conferences, n_authors))
+    at_mat = load_sparse_matrix(data_path / 'AT.txt', (n_authors, n_terms))
+    ct_mat = load_sparse_matrix(data_path / 'CT.txt', (n_conferences, n_terms))
+
     relations = {
-        'AC': load_sparse_matrix(data_path / 'AC.txt', (n_authors, n_conferences)),
-        'AT': load_sparse_matrix(data_path / 'AT.txt', (n_authors, n_terms)),
-        'CA': load_sparse_matrix(data_path / 'CA.txt', (n_conferences, n_authors)),
-        'CT': load_sparse_matrix(data_path / 'CT.txt', (n_conferences, n_terms)),
+        'CA': ca_mat,
+        'AC': ca_mat.T,
+        'AT': at_mat,
+        'TA': at_mat.T,
+        'CT': ct_mat,
+        'TC': ct_mat.T,
     }
-    relations['TC'] = relations['CT'].T
-    relations['TA'] = relations['AT'].T
 
     # 4. Compute all homogeneous adjacency matrices from specified meta-paths
     author_meta_paths = ['AAA', 'ACA', 'ATA']
