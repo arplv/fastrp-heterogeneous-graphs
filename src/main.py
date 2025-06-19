@@ -99,19 +99,40 @@ def scipy_to_torch_sparse(matrix: sp.csr_matrix, device: torch.device) -> torch.
     return torch.sparse_coo_tensor(i, v, torch.Size(shape), device=device)
 
 
-def parse_meta_path(meta_path_str: str, relations: dict) -> sp.csr_matrix:
+def parse_meta_path(path_str: str, relations: dict) -> sp.csr_matrix:
     """
-    Computes the adjacency matrix for a given meta-path string (e.g., 'ACA').
-    This function no longer handles powers; that logic is now in the model.
+    Computes the adjacency matrix for a given meta-path string.
+    Supports two types of definitions:
+    1. Standard path: 'ACA' (Author-Conference-Author)
+    2. Product path: 'AT@AT.T' (Author-Term x Term-Author)
     """
-    print(f"  Computing base matrix for meta-path: {meta_path_str}")
-    parts = list(meta_path_str)
+    print(f"  Computing base matrix for meta-path: {path_str}")
     
-    current_mat = relations[parts[0]][parts[1]]
-    for i in range(1, len(parts) - 1):
-        current_mat = current_mat @ relations[parts[i]][parts[i+1]]
+    if '@' in path_str:
+        # Handle product paths like 'AT@AT.T'
+        left_str, right_str = path_str.split('@')
+        
+        def get_matrix(s):
+            if s.endswith('.T'):
+                mat_key = s[:-2]
+                return relations[mat_key[0]][mat_key[1]].T
+            else:
+                return relations[s[0]][s[1]]
+
+        left_mat = get_matrix(left_str)
+        right_mat = get_matrix(right_str)
+        
+        # Note: This is a standard, potentially dense multiplication
+        # It's not using the binary numba kernel
+        final_mat = left_mat @ right_mat
+    else:
+        # Handle standard paths like 'ACA'
+        parts = list(path_str)
+        final_mat = relations[parts[0]][parts[1]]
+        for i in range(1, len(parts) - 1):
+            final_mat = final_mat @ relations[parts[i]][parts[i+1]]
     
-    return current_mat.tocsr()
+    return final_mat.tocsr()
 
 
 def get_training_pairs(adj_matrix: sp.csr_matrix, num_neg_samples: int, seed: int):
@@ -278,7 +299,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="FastRP for Heterogeneous Graphs")
     parser.add_argument('--data-dir', type=str, default='data', help='Directory containing the dataset')
-    parser.add_argument('--meta-paths', type=str, nargs='+', default=['AAA', 'ATA', 'ACA'], help='Meta-paths to use')
+    parser.add_argument('--meta-paths', type=str, nargs='+', default=['AAA', 'ATA', 'ACA', 'AT@AT.T'], help='Meta-paths to use. Supports standard paths (e.g., ACA) and product paths (e.g., AT@AT.T)')
     parser.add_argument('--dim', type=int, default=64, help='Embedding dimension')
     parser.add_argument('--num-powers', type=int, default=3, help='Number of matrix powers to use (q)')
     parser.add_argument('--alpha', type=float, default=-0.5, help='Exponent for degree weighting of projection matrix')
