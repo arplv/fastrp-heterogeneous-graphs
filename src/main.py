@@ -189,7 +189,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate.')
     parser.add_argument('--entropy-beta', type=float, default=0.05, help='Coefficient for entropy regularization term.')
     parser.add_argument('--neg-samples', type=int, default=15, help='Number of negative samples per positive sample.')
-    parser.add_argument('--batch-size', type=int, default=64, help='Training batch size')
+    parser.add_argument('--batch-size', type=int, default=8192, help='Training batch size')
     parser.add_argument('--device', type=str, default='auto', help='Device to use for training (e.g., "cpu", "cuda", "mps", "auto").')
     parser.add_argument('--output', type=str, default='author_embeddings.npy', help='Path to save final embeddings')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility.')
