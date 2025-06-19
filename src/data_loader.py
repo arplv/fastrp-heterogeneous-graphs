@@ -26,22 +26,17 @@ def load_edge_list(path: Path, n_rows: int, n_cols: int):
     return mat.tocsr()
 
 def load_author_mappings(data_dir: Union[str, Path]):
-    """Loads author names and creates id-to-name and name-to-id mappings."""
+    """Loads author names from author_dict.txt and creates id-to-name and name-to-id mappings."""
     data_dir = Path(data_dir)
     id_to_name = {}
     name_to_id = {}
-    with open(data_dir / 'author.txt', 'r', encoding='latin-1') as f:
-        for line in f:
-            try:
-                parts = line.strip().split('\t')
-                if len(parts) == 2:
-                    author_id, author_name = parts
-                    # Convert from 1-based ID in file to 0-based internal ID
-                    zero_based_id = int(author_id) - 1
-                    id_to_name[zero_based_id] = author_name
-                    name_to_id[author_name.lower()] = zero_based_id
-            except (ValueError, IndexError):
-                continue
+    # The file is author_dict.txt, and it contains one name per line.
+    # The 0-based line number corresponds to the author's internal ID.
+    with open(data_dir / 'author_dict.txt', 'r', encoding='latin-1') as f:
+        for i, line in enumerate(f):
+            author_name = line.strip()
+            id_to_name[i] = author_name
+            name_to_id[author_name.lower()] = i
     return id_to_name, name_to_id
 
 def load_data(data_dir: Union[str, Path] = 'data'):
