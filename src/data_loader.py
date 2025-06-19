@@ -25,6 +25,25 @@ def load_edge_list(path: Path, n_rows: int, n_cols: int):
     mat = sp.coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(n_rows, n_cols))
     return mat.tocsr()
 
+def load_author_mappings(data_dir: Union[str, Path]):
+    """Loads author names and creates id-to-name and name-to-id mappings."""
+    data_dir = Path(data_dir)
+    id_to_name = {}
+    name_to_id = {}
+    with open(data_dir / 'author.txt', 'r', encoding='latin-1') as f:
+        for line in f:
+            try:
+                parts = line.strip().split('\t')
+                if len(parts) == 2:
+                    author_id, author_name = parts
+                    # Convert from 1-based ID in file to 0-based internal ID
+                    zero_based_id = int(author_id) - 1
+                    id_to_name[zero_based_id] = author_name
+                    name_to_id[author_name.lower()] = zero_based_id
+            except (ValueError, IndexError):
+                continue
+    return id_to_name, name_to_id
+
 def load_data(data_dir: Union[str, Path] = 'data'):
     """Loads the entire bibliographic dataset."""
     data_dir = Path(data_dir)

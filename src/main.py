@@ -174,6 +174,21 @@ def main(args):
     np.save(args.output, final_embeddings)
     print(f"Embeddings saved to {args.output}")
 
+    # Final evaluation on the full dataset
+    model.eval()
+    # Note: A full evaluation might be needed here depending on the task
+    print("Training finished.")
+
+    # Save the model checkpoint
+    if args.save_model_path:
+        print(f"Saving model checkpoint to {args.save_model_path}...")
+        checkpoint = {
+            'args': {k: v for k, v in vars(args).items() if k != 'relations'},
+            'model_state_dict': model.state_dict(),
+        }
+        torch.save(checkpoint, args.save_model_path)
+        print("Model saved.")
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="FastRP for Heterogeneous Graphs")
@@ -190,10 +205,11 @@ if __name__ == '__main__':
     parser.add_argument('--entropy-beta', type=float, default=0.05, help='Coefficient for entropy regularization term.')
     parser.add_argument('--neg-samples', type=int, default=3, help='Number of negative samples per positive sample.')
     parser.add_argument('--batch-size', type=int, default=4096, help='Training batch size')
-    parser.add_argument('--device', type=str, default='auto', help='Device to use for training (e.g., "cpu", "cuda", "mps", "auto").')
+    parser.add_argument('--device', type=str, default='auto', help='Device to use for training (e.g., "cpu", "cuda", "mps").')
     parser.add_argument('--output', type=str, default='author_embeddings.npy', help='Path to save final embeddings')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility.')
     parser.add_argument('--cache-dir', type=str, default='./matrix_cache', help='Directory to cache computed meta-path matrices.')
+    parser.add_argument('--save-model-path', type=str, default='fastrp_model.pth', help='Path to save the trained model checkpoint.')
     
     args = parser.parse_args()
     main(args) 
