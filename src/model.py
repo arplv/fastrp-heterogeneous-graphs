@@ -65,7 +65,7 @@ class FastRPModel(nn.Module):
         if s == 0: s = 1
 
         rng = np.random.default_rng(42)
-        rows, cols, data = [], [], [], []
+        rows, cols, data = [], [], []
         for j in range(dim):
             indices = rng.choice(n_authors, size=s, replace=False)
             values = rng.choice([1.0, -1.0], size=s)
@@ -92,7 +92,7 @@ class FastRPModel(nn.Module):
         M_norm = self._get_normalized_path_matrix(path_str)
         return torch.sparse.mm(M_norm, self.R_prime)
 
-    def _get_normalized_path_matrix(self, path_str: str) -> sp.csr_matrix:
+    def _get_normalized_path_matrix(self, path_str: str) -> torch.Tensor:
         """Parses a path string and computes the normalized adjacency matrix."""
         # This part remains on the CPU with sparse torch tensors
         if '@' in path_str:
@@ -118,9 +118,9 @@ class FastRPModel(nn.Module):
             degrees = torch.sparse.sum(M, dim=sum_dim).to_dense()
             inv_degree = np.power(degrees.cpu().numpy(), self.beta)
         inv_degree[np.isinf(inv_degree)] = 0
-        D_inv_beta = torch.diag(torch.from_numpy(inv_degree).float()).to_sparse()
+        D_inv_beta = torch.diag(torch.from_numpy(inv_degree).float()).to_sparse().cpu()
         
-        M_norm = torch.sparse.mm(D_inv_beta, M.to_dense()).to_sparse()
+        M_norm = torch.sparse.mm(D_inv_beta, M.cpu().to_dense()).to_sparse()
         return M_norm.cpu()
 
     def get_embedding(self) -> torch.Tensor:
@@ -150,5 +150,5 @@ class FastRPModel(nn.Module):
         zj = emb[idx_j]
         
         dist_sq = ((zi - zj) ** 2).sum(dim=1)
-        logits = self.intercept.to(self.device) - dist_sq
+        logits = self.intercept - dist_sq
         return torch.sigmoid(logits) 
