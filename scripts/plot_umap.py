@@ -90,7 +90,7 @@ def main(args):
 
     # --- 3. UMAP Projection ---
     print("Performing UMAP projection...")
-    umap_params = {'n_neighbors': 15, 'min_dist': 0.1, 'metric': "cosine", 'random_state': 42}
+    umap_params = {'n_neighbors': 15, 'min_dist': 0.5, 'metric': "cosine"}
     reducer = umap.UMAP(**umap_params)
     
     start_time = time.time()
