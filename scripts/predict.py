@@ -24,8 +24,10 @@ def main():
     
     print(f"Loading checkpoint from {args.checkpoint_path} to get model intercept...")
     checkpoint = torch.load(args.checkpoint_path, map_location='cpu')
-    intercept = checkpoint.get('intercept', 0.0) # Default to 0.0 if not found
-    
+    state_dict  = checkpoint["model_state_dict"]
+    intercept   = state_dict["intercept"].item()   # tensor → float
+    slope       = state_dict["slope"].item()
+        
     print(f"Loading author mappings from {args.data_dir}...")
     id_to_name, name_to_id = load_author_mappings(args.data_dir)
 
@@ -58,7 +60,9 @@ def main():
     z2 = embeddings[id2]
     
     dist_sq = ((z1 - z2) ** 2).sum()
-    logits = intercept - dist_sq
+    
+
+    logits      = intercept - slope * dist_sq
     probability = torch.sigmoid(logits).item()
 
     print(f"\\nPredicted probability of co-authorship: {probability:.2%}")

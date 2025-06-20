@@ -26,7 +26,8 @@ def load_labels(label_path: Path) -> tuple[dict[int, str], dict[str, int]]:
             for line in f:
                 try:
                     author_id, label_str = line.strip().split('\t')
-                    author_id = int(author_id)
+                    # Convert from 1-based ID in file to 0-based index
+                    author_id = int(author_id) - 1
                     if label_str not in label_str_to_int:
                         label_str_to_int[label_str] = next_label_id
                         next_label_id += 1
@@ -47,7 +48,8 @@ def load_names(names_path: Path) -> dict[int, str]:
             for line in f:
                 try:
                     author_id, name = line.strip().split('\t')
-                    id_to_name[int(author_id)] = name
+                    # Convert from 1-based ID in file to 0-based index
+                    id_to_name[int(author_id) - 1] = name
                 except ValueError:
                     print(f"Warning: Skipping malformed line in names file: {line.strip()}")
                     continue
@@ -147,14 +149,16 @@ def main(args):
     # Add annotations
     if args.annotate:
         print(f"Annotating authors: {args.annotate}")
-        for author_id in args.annotate:
+        for raw_author_id in args.annotate:
+            # User provides 1-based ID, convert to 0-based index
+            author_id = raw_author_id - 1
             if 0 <= author_id < num_embeddings:
-                label = id_to_name.get(author_id, f"ID: {author_id}")
+                label = id_to_name.get(author_id, f"ID: {raw_author_id}")
                 ax.text(embeddings_2d[author_id, 0], embeddings_2d[author_id, 1], label,
                         fontsize=9, fontweight='bold', ha='center', va='bottom',
                         bbox=dict(boxstyle='round,pad=0.2', fc='yellow', alpha=0.7))
             else:
-                print(f"Warning: Annotation ID {author_id} is out of bounds. Skipping.")
+                print(f"Warning: Annotation ID {raw_author_id} is out of bounds. Skipping.")
 
     # --- 5. Final Touches & Save/Show ---
     title = f"UMAP Projection of {embeddings.shape[1]}-D Embeddings\n(n_neighbors={umap_params['n_neighbors']}, min_dist={umap_params['min_dist']})"
@@ -184,7 +188,7 @@ if __name__ == '__main__':
     parser.add_argument('--names', type=Path,
                         help="Optional path to author names file (author_id<tab>name).")
     parser.add_argument('--annotate', type=lambda s: [int(item) for item in s.split(',')],
-                        help="Optional comma-separated list of author IDs to annotate in the plot.")
+                        help="Optional comma-separated list of 1-based author IDs to annotate in the plot.")
     parser.add_argument('--output', type=Path,
                         help="Optional path to save the output plot. If not provided, shows the plot.")
     
