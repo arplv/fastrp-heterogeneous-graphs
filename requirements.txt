@@ -3,4 +3,8 @@ scipy
 scikit-learn
 tqdm
 torch --index-url https://download.pytorch.org/whl/cu121
-numba 
+numba
+umap-learn
+matplotlib
+torch-geometric
+torchmetrics 

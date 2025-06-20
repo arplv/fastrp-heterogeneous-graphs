@@ -47,58 +47,38 @@ class FastRPModel(nn.Module):
         super().__init__()
         self.device = torch.device(device)
         self.dim = dim
-
-        # --- Feature Generation (Pre-computation) ---
-        # 1. Create the random projection matrix R' (on CPU)
-        aa_degrees = relations['A']['A'].sum(axis=1).A.flatten()
-        R_prime_scipy = self._create_random_projection_matrix(n_authors, dim, alpha, aa_degrees, s=s)
-
-        # 2. For each meta-path, generate a sequence of feature matrices
-        all_path_features = []
-        for path_str in meta_paths:
-            # 2a. Compute the full (N x N) sparse meta-path matrix with per-hop normalization
-            M_norm = self._compute_meta_path_matrix(path_str, relations, beta)
-            
-            # 2b. Compute the feature matrix U = M_norm @ R'
-            current_U = M_norm @ R_prime_scipy
-            
-            # Convert to dense tensor and normalize
-            current_U_tensor = torch.from_numpy(current_U.toarray()).float()
-            current_U_tensor = F.normalize(current_U_tensor, p=2, dim=1)
-            
-            path_features = [current_U_tensor]
-            
-            # 2c. Compute powers of the feature matrix: U_2 = M_norm @ U, U_3 = M_norm @ U_2 ...
-            current_U_numpy = current_U.toarray()
-            for _ in range(num_powers - 1):
-                current_U_numpy = M_norm @ current_U_numpy
-                
-                current_U_tensor = torch.from_numpy(current_U_numpy).float()
-                current_U_tensor = F.normalize(current_U_tensor, p=2, dim=1)
-                
-                path_features.append(current_U_tensor)
-            
-            all_path_features.append(torch.stack(path_features, dim=0))
-
-        # 3. Store the pre-computed features and move to the target device ONCE.
-        #    Shape: (num_meta_paths, num_powers, n_authors, dim)
-        self.precomputed_features = torch.stack(all_path_features, dim=0).to(self.device)
-
-        # --- Learnable Parameters (on target device) ---
-        # Use a 2D weight matrix to distinguish between paths and powers
-        self.feature_weights = nn.Parameter(torch.ones(self.precomputed_features.shape[0], self.precomputed_features.shape[1]))
+        self.feature_weights = nn.Parameter(torch.ones(len(meta_paths), num_powers))
         self.intercept = nn.Parameter(torch.tensor(0.0))
+        self.slope = nn.Parameter(torch.tensor(1.0))
+        
+        # --- Sparse Feature Generation (Pre-computation on CPU) ---
+        R_prime = self._create_random_projection_matrix(n_authors, dim, alpha, relations['A']['A'].sum(axis=1).A.flatten(), s=s)
+
+        self._sparse_features = []
+        for path_str in meta_paths:
+            M_norm = self._compute_normalized_meta_path_matrix(path_str, relations, beta)
+            
+            path_power_features = []
+            # U_1 = M_norm @ R'
+            current_U = M_norm @ R_prime
+            path_power_features.append(current_U)
+            
+            # U_k = M_norm @ U_{k-1}
+            for _ in range(num_powers - 1):
+                current_U = M_norm @ current_U
+                path_power_features.append(current_U)
+            
+            self._sparse_features.append(path_power_features)
+
+        # Embedding cache
+        self._emb_cache = None
+        self._emb_cache_version = None
 
     def _create_random_projection_matrix(self, n_nodes, dim, alpha, degrees, s):
-        """
-        Creates a sparse random projection matrix R' = D^alpha @ R.
-        R has `s` non-zero entries per column, scaled by 1/sqrt(s).
-        """
         rng = np.random.default_rng(42)
         rows, cols, data = [], [], []
         for j in range(dim):
             indices = rng.choice(n_nodes, size=s, replace=False)
-            # Scale values by 1/sqrt(s) for variance control
             values = rng.choice([1.0, -1.0], size=s) / np.sqrt(s)
             rows.extend(indices)
             cols.extend([j] * s)
@@ -111,72 +91,65 @@ class FastRPModel(nn.Module):
             return D_alpha @ R
         return R
 
-    def _compute_meta_path_matrix(self, path_str: str, relations: Dict[str, Dict[str, sp.csr_matrix]], beta: float):
-        """
-        Computes a single sparse meta-path matrix, applying degree normalization at each hop.
-        Formula for a path v1->v2->v3: (D_v1^-beta @ M_v1v2) @ (D_v2^-beta @ M_v2v3)
-        """
-        print(f"  Computing features for meta-path: {path_str}")
+    def _hop(self, mat: sp.csr_matrix, beta: float) -> sp.csr_matrix:
+        """Applies degree normalization to a sparse matrix for one hop."""
+        if beta == 0:
+            return mat
+        
+        degrees = np.array(mat.sum(axis=1)).flatten()
+        # Use `where` to avoid division by zero or 0^negative
+        inv_degree = np.power(degrees, beta, where=degrees!=0) 
+        # Clean up any potential inf/nan values
+        inv_degree = np.nan_to_num(inv_degree, copy=False, posinf=0.0, neginf=0.0)
+        
+        normalizer = sp.diags(inv_degree)
+        return normalizer @ mat
 
+    def _compute_normalized_meta_path_matrix(self, path_str: str, relations: Dict[str, Dict[str, sp.csr_matrix]], beta: float):
+        print(f"  Computing features for meta-path: {path_str}")
         if '@' in path_str:
             raise NotImplementedError("Element-wise product of meta-paths ('@') is not supported in this version.")
 
         parts = list(path_str)
+        # Initialize with the first relation, normalized
+        final_mat = self._hop(relations[parts[0]][parts[1]].copy(), beta)
         
-        # Initialize with the first normalized matrix in the path
-        start_node, end_node = parts[0], parts[1]
-        final_mat = relations[start_node][end_node].copy()
-
-        if beta != 0:
-            degrees = np.array(final_mat.sum(axis=1)).flatten()
-            inv_degree = np.power(degrees, beta, where=degrees!=0) # Avoid 0^negative
-            inv_degree = np.nan_to_num(inv_degree, copy=False, posinf=0.0, neginf=0.0)
-            D_inv_beta = sp.diags(inv_degree)
-            final_mat = D_inv_beta @ final_mat
-        
-        # Chain matrix multiplications for the rest of the path
+        # Chain multiplications, normalizing at each hop
         for i in range(1, len(parts) - 1):
-            start_node, end_node = parts[i], parts[i+1]
-            next_mat = relations[start_node][end_node].copy()
-
-            if beta != 0:
-                degrees = np.array(next_mat.sum(axis=1)).flatten()
-                inv_degree = np.power(degrees, beta, where=degrees!=0)
-                inv_degree = np.nan_to_num(inv_degree, copy=False, posinf=0.0, neginf=0.0)
-                D_inv_beta = sp.diags(inv_degree)
-                next_mat = D_inv_beta @ next_mat
-
+            next_mat = self._hop(relations[parts[i]][parts[i+1]].copy(), beta)
             final_mat = final_mat @ next_mat
         
         return final_mat
 
-    def get_embedding(self) -> torch.Tensor:
-        """
-        Computes the final embedding by taking a weighted average of all pre-computed features.
-        The weights are learned during training.
-        """
-        # Softmax over the 'powers' dimension for each 'path'
-        weights = F.softmax(self.feature_weights, dim=1)
-
-        # Reshape weights for broadcasting: (num_paths, num_powers, 1, 1)
-        weights_reshaped = weights.view(weights.shape[0], weights.shape[1], 1, 1)
-
-        # Weighted sum. 'precomputed_features' is already on the correct device.
-        # Sum across both the paths and powers dimensions to get the final embedding.
-        embedding = (self.precomputed_features * weights_reshaped).sum(dim=(0, 1))
+    def _refresh_embedding_cache(self):
+        """Computes and caches the final embedding."""
+        weights = F.softmax(self.feature_weights, dim=1).cpu().numpy()
         
-        return embedding
+        # Perform weighted sum of sparse matrices on CPU
+        final_embedding_sparse = sp.csr_matrix((self._sparse_features[0][0].shape), dtype=np.float32)
+        for i in range(len(self._sparse_features)):
+            for j in range(len(self._sparse_features[i])):
+                final_embedding_sparse += weights[i, j] * self._sparse_features[i][j]
+        
+        # Densify, convert to tensor, and move to the target device
+        self._emb_cache = torch.from_numpy(final_embedding_sparse.toarray()).float().to(self.device)
+        self._emb_cache_version = self.feature_weights.data_ptr()
+
+    def get_embedding(self) -> torch.Tensor:
+        """Returns the cached embedding, refreshing if weights have changed."""
+        if self._emb_cache is None or self._emb_cache_version != self.feature_weights.data_ptr():
+            self._refresh_embedding_cache()
+        return self._emb_cache
 
     def forward(self, idx_i: torch.Tensor, idx_j: torch.Tensor) -> torch.Tensor:
         emb = self.get_embedding()
-        # Indices must be on the same device as the embedding matrix
-        zi = emb[idx_i.to(self.device)]
-        zj = emb[idx_j.to(self.device)]
+        zi = emb[idx_i] # No .to(device) needed, indices are already on device
+        zj = emb[idx_j]
         
         dist_sq = ((zi - zj) ** 2).sum(dim=1)
         
-        # Scale distance by dimension to make it independent of embedding size
-        scaled_dist = dist_sq / self.dim
+        # Use the learnable slope parameter
+        scaled_dist = self.slope * dist_sq / self.dim
         
         logits = self.intercept - scaled_dist
         return torch.sigmoid(logits) 
