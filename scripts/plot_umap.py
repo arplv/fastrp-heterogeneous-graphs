@@ -22,7 +22,7 @@ def load_labels(label_path: Path) -> tuple[dict[int, str], dict[str, int]]:
     label_str_to_int = {}
     next_label_id = 0
     try:
-        with label_path.open('r', encoding='utf-8') as f:
+        with label_path.open('r', encoding='latin-1') as f:
             for line in f:
                 try:
                     author_id, label_str = line.strip().split('\t')
@@ -43,7 +43,7 @@ def load_names(names_path: Path) -> dict[int, str]:
     """Loads author names from a tab-separated file (author_id<tab>name)."""
     id_to_name = {}
     try:
-        with names_path.open('r', encoding='utf-8') as f:
+        with names_path.open('r', encoding='latin-1') as f:
             for line in f:
                 try:
                     author_id, name = line.strip().split('\t')
