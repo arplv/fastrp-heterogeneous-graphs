@@ -123,7 +123,7 @@ class FastRPModel(nn.Module):
 
     def _refresh_embedding_cache(self):
         """Computes and caches the final embedding."""
-        weights = F.softmax(self.feature_weights, dim=1).cpu().numpy()
+        weights = F.softmax(self.feature_weights, dim=1).detach().cpu().numpy()
         
         # Perform weighted sum of sparse matrices on CPU
         final_embedding_sparse = sp.csr_matrix((self._sparse_features[0][0].shape), dtype=np.float32)
