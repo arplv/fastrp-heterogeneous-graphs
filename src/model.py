@@ -72,7 +72,7 @@ class FastRPModel(nn.Module):
 
         # Embedding cache
         self._emb_cache = None
-        self._prev_weights = None
+        self.refresh_embedding_cache() # Initial population
 
     def _create_random_projection_matrix(self, n_nodes, dim, alpha, degrees, s):
         rng = np.random.default_rng(42)
@@ -121,7 +121,7 @@ class FastRPModel(nn.Module):
         
         return final_mat
 
-    def _refresh_embedding_cache(self):
+    def refresh_embedding_cache(self):
         """Computes and caches the final embedding."""
         weights = F.softmax(self.feature_weights, dim=1).detach().cpu().numpy()
         
@@ -135,12 +135,7 @@ class FastRPModel(nn.Module):
         self._emb_cache = torch.from_numpy(final_embedding_sparse.toarray()).float().to(self.device)
 
     def get_embedding(self) -> torch.Tensor:
-        """Returns the cached embedding, refreshing if weights have changed."""
-        if (self._emb_cache is None or
-            not hasattr(self, "_prev_weights") or
-            not torch.allclose(self._prev_weights, self.feature_weights)):
-            self._prev_weights = self.feature_weights.detach().clone()
-            self._refresh_embedding_cache()
+        """Returns the cached embedding. The cache must be manually refreshed."""
         return self._emb_cache
 
     def forward(self, idx_i: torch.Tensor, idx_j: torch.Tensor) -> torch.Tensor:

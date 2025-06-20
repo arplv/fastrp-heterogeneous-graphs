@@ -61,8 +61,6 @@ def main(args):
     print("Starting training...")
     for epoch in range(args.epochs):
         model.train()
-        # Refresh the embedding cache once per epoch
-        model.get_embedding()
         
         perm = torch.randperm(pos_edge_index.size(1), device=model_device)
 
@@ -105,6 +103,9 @@ def main(args):
             
             loss.backward()
             optimizer.step()
+
+            # Refresh embedding cache after weights have been updated
+            model.refresh_embedding_cache()
 
             total_loss += loss.item() * (pos_batch.size(1) + neg_batch.size(1))
             
@@ -163,7 +164,7 @@ if __name__ == '__main__':
     parser.add_argument('--beta', type=float, default=-1.0, help='Exponent for degree normalization of the meta-path matrix.')
     parser.add_argument('--epochs', type=int, default=30, help='Number of training epochs.')
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate.')
-    parser.add_argument('--lambda-entropy', type=float, default=0.001, help='Coefficient for entropy regularization. Positive values encourage higher entropy (diverse weights).')
+    parser.add_argument('--lambda-entropy', type=float, default=0.0, help='Coefficient for entropy regularization. Set to 0 to disable, or a small value like 1e-4 to encourage diversity.')
     parser.add_argument('--neg-samples', type=int, default=3, help='Number of negative samples per positive sample.')
     parser.add_argument('--batch-size', type=int, default=4096, help='Training batch size')
     parser.add_argument('--device', type=str, default='auto', help='Device to use for training (e.g., "cpu", "cuda", "mps").')
