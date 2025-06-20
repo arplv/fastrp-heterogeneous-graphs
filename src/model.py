@@ -51,28 +51,29 @@ class FastRPModel(nn.Module):
         self.intercept = nn.Parameter(torch.tensor(0.0))
         self.slope = nn.Parameter(torch.tensor(1.0))
         
-        # --- Sparse Feature Generation (Pre-computation on CPU) ---
+        # --- Feature Generation (Pre-computation) ---
         R_prime = self._create_random_projection_matrix(n_authors, dim, alpha, relations['A']['A'].sum(axis=1).A.flatten(), s=s)
 
-        self._sparse_features = []
+        features_list = []
         for path_str in meta_paths:
             M_norm = self._compute_normalized_meta_path_matrix(path_str, relations, beta)
             
-            path_power_features = []
-            # U_1 = M_norm @ R'
-            current_U = M_norm @ R_prime
-            path_power_features.append(current_U)
+            current_U_sparse = M_norm @ R_prime
             
-            # U_k = M_norm @ U_{k-1}
-            for _ in range(num_powers - 1):
-                current_U = M_norm @ current_U
-                path_power_features.append(current_U)
-            
-            self._sparse_features.append(path_power_features)
+            # First power
+            current_U_tensor = torch.from_numpy(current_U_sparse.toarray()).float()
+            current_U_tensor = F.normalize(current_U_tensor, p=2, dim=1)
+            features_list.append(current_U_tensor)
 
-        # Embedding cache
-        self._emb_cache = None
-        self.refresh_embedding_cache() # Initial population
+            # Higher powers
+            for _ in range(num_powers - 1):
+                current_U_sparse = M_norm @ current_U_sparse
+                current_U_tensor = torch.from_numpy(current_U_sparse.toarray()).float()
+                current_U_tensor = F.normalize(current_U_tensor, p=2, dim=1)
+                features_list.append(current_U_tensor)
+        
+        # Shape: (F, N, D) where F = num_paths * num_powers
+        self.features = torch.stack(features_list, dim=0).to(self.device)
 
     def _create_random_projection_matrix(self, n_nodes, dim, alpha, degrees, s):
         rng = np.random.default_rng(42)
@@ -121,32 +122,18 @@ class FastRPModel(nn.Module):
         
         return final_mat
 
-    def refresh_embedding_cache(self):
-        """Computes and caches the final embedding."""
-        weights = F.softmax(self.feature_weights, dim=1).detach().cpu().numpy()
-        
-        # Perform weighted sum of sparse matrices on CPU
-        final_embedding_sparse = sp.csr_matrix((self._sparse_features[0][0].shape), dtype=np.float32)
-        for i in range(len(self._sparse_features)):
-            for j in range(len(self._sparse_features[i])):
-                final_embedding_sparse += weights[i, j] * self._sparse_features[i][j]
-        
-        # Densify, convert to tensor, and move to the target device
-        self._emb_cache = torch.from_numpy(final_embedding_sparse.toarray()).float().to(self.device)
-
-    def get_embedding(self) -> torch.Tensor:
-        """Returns the cached embedding. The cache must be manually refreshed."""
-        return self._emb_cache
+    def _mixed_embedding(self):
+        # weights: (n_paths, n_powers) -> flatten -> (F)
+        w = F.softmax(self.feature_weights.flatten(), dim=0)
+        # einsum: w_f * X_fnd -> nd
+        return torch.einsum('f,fnd->nd', w, self.features)
 
     def forward(self, idx_i: torch.Tensor, idx_j: torch.Tensor) -> torch.Tensor:
-        emb = self.get_embedding()
-        zi = emb[idx_i] # No .to(device) needed, indices are already on device
-        zj = emb[idx_j]
+        E = self._mixed_embedding() # (N, D) - differentiable!
+        zi = E[idx_i]
+        zj = E[idx_j]
         
         dist_sq = ((zi - zj) ** 2).sum(dim=1)
         
-        # Use the learnable slope parameter but without dwarfing the logits
-        scaled_dist = self.slope * dist_sq # No / self.dim
-        
-        logits = self.intercept - scaled_dist
+        logits = self.intercept - self.slope * dist_sq
         return torch.sigmoid(logits) 

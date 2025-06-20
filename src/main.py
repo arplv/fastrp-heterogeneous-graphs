@@ -104,9 +104,6 @@ def main(args):
             loss.backward()
             optimizer.step()
 
-            # Refresh embedding cache after weights have been updated
-            model.refresh_embedding_cache()
-
             total_loss += loss.item() * (pos_batch.size(1) + neg_batch.size(1))
             
             # Update metrics with the current batch's results
