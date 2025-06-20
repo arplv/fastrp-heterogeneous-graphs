@@ -47,6 +47,8 @@ def main(args):
 
     # Prepare training data: positive edges
     train_adj = relations['A']['A']
+    train_adj.setdiag(0)
+    train_adj.eliminate_zeros()
     pos_edge_index = torch.from_numpy(np.array(train_adj.nonzero())).long().to(model_device)
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
@@ -95,11 +97,11 @@ def main(args):
             
             bce_loss = F.binary_cross_entropy(preds, labels)
             
-            # Subtract entropy to encourage diverse weights
+            # Add entropy to encourage diverse weights
             weights_softmax = F.softmax(model.feature_weights, dim=1)
             entropy = -torch.sum(weights_softmax * torch.log(weights_softmax + 1e-7))
             
-            loss = bce_loss - args.lambda_entropy * entropy
+            loss = bce_loss + args.lambda_entropy * entropy
             
             loss.backward()
             optimizer.step()

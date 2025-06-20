@@ -72,7 +72,7 @@ class FastRPModel(nn.Module):
 
         # Embedding cache
         self._emb_cache = None
-        self._emb_cache_version = None
+        self._prev_weights = None
 
     def _create_random_projection_matrix(self, n_nodes, dim, alpha, degrees, s):
         rng = np.random.default_rng(42)
@@ -133,11 +133,13 @@ class FastRPModel(nn.Module):
         
         # Densify, convert to tensor, and move to the target device
         self._emb_cache = torch.from_numpy(final_embedding_sparse.toarray()).float().to(self.device)
-        self._emb_cache_version = self.feature_weights.data_ptr()
 
     def get_embedding(self) -> torch.Tensor:
         """Returns the cached embedding, refreshing if weights have changed."""
-        if self._emb_cache is None or self._emb_cache_version != self.feature_weights.data_ptr():
+        if (self._emb_cache is None or
+            not hasattr(self, "_prev_weights") or
+            not torch.allclose(self._prev_weights, self.feature_weights)):
+            self._prev_weights = self.feature_weights.detach().clone()
             self._refresh_embedding_cache()
         return self._emb_cache
 
@@ -148,8 +150,8 @@ class FastRPModel(nn.Module):
         
         dist_sq = ((zi - zj) ** 2).sum(dim=1)
         
-        # Use the learnable slope parameter
-        scaled_dist = self.slope * dist_sq / self.dim
+        # Use the learnable slope parameter but without dwarfing the logits
+        scaled_dist = self.slope * dist_sq # No / self.dim
         
         logits = self.intercept - scaled_dist
         return torch.sigmoid(logits) 
