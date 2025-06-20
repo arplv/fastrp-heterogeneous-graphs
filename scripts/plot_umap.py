@@ -18,6 +18,22 @@ import umap
 from sklearn.preprocessing import normalize
 from adjustText import adjust_text
 
+def load_area_names(path: Path) -> dict[str, str]:
+    """Loads research area names from the readme file (e.g., 'Database->1')."""
+    area_map = {}
+    if not path.exists():
+        print(f"Warning: Area names file not found at '{path}'. Legend will show numeric IDs.")
+        return area_map
+    with open(path, 'r', encoding='latin-1') as f:
+        for line in f:
+            if '->' in line:
+                try:
+                    name, num = line.strip().split('->')
+                    area_map[num.strip()] = name.strip()
+                except ValueError:
+                    continue
+    return area_map
+
 def load_coauthorship(path: Path, n_authors: int) -> sp.csr_matrix:
     """Loads the symmetric co-authorship graph from a 1-based edge list."""
     rows, cols = [], []
@@ -98,6 +114,7 @@ def main(args):
 
     author_id_to_label_str, label_str_to_int = load_labels(args.labels)
     id_to_name = load_names(args.names) if args.names else {}
+    area_names = load_area_names(args.data_dir / 'readme.txt')
 
     # --- 2. Pre-processing & Filtering ---
     print("Pre-processing data...")
@@ -187,8 +204,9 @@ def main(args):
         # Combine the label mask with the co-authorship filter mask
         mask = (point_colors == label_int) & plot_mask
         if np.any(mask):
-            # Use the actual label string for the legend
-            ax.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], s=10, color=cmap(label_int), label=int_to_label_str.get(label_int, label_str), alpha=0.8)
+            # Use the descriptive name if available, otherwise the original label string
+            legend_label = area_names.get(label_str, label_str)
+            ax.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], s=10, color=cmap(label_int), label=legend_label, alpha=0.8)
 
     # Add legend
     ax.legend(title="Research Fields", bbox_to_anchor=(1.02, 1), loc='upper left')
