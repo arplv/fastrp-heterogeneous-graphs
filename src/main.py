@@ -69,7 +69,7 @@ def main(args):
         val_pos_edge_index = all_pos_edges[:, perm[:val_size]].to(model_device)
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    scheduler = ReduceLROnPlateau(optimizer, 'max', factor=0.5, patience=10, verbose=True)
+    scheduler = ReduceLROnPlateau(optimizer, 'max', factor=0.5, patience=10)
     
     # Initialize metrics on the target device
     train_auroc = AUROC(task="binary").to(model_device)
