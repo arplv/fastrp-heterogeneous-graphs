@@ -7,6 +7,8 @@ from torch_geometric.utils import negative_sampling
 from torchmetrics import AUROC, Precision, Recall, F1Score
 from pathlib import Path
 from tqdm import tqdm
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+import copy
 
 from data_loader import load_data
 from model import FastRPModel
@@ -46,45 +48,55 @@ def main(args):
     ).to(model_device)
 
     # Prepare training data: positive edges
-    train_adj = relations['A']['A']
-    train_adj.setdiag(0)
-    train_adj.eliminate_zeros()
-    pos_edge_index = torch.from_numpy(np.array(train_adj.nonzero())).long().to(model_device)
+    if args.edge_split:
+        print(f"Loading edge split from {args.edge_split}")
+        split_data = torch.load(args.edge_split)
+        train_pos_edge_index = split_data['train_pos_edge_index'].to(model_device)
+        val_pos_edge_index = split_data['val_pos_edge_index'].to(model_device)
+        print(f"  Train positive edges: {train_pos_edge_index.size(1)}")
+        print(f"  Validation positive edges: {val_pos_edge_index.size(1)}")
+    else:
+        print("No edge split provided. Using all positive edges for training and validation.")
+        train_adj = relations['A']['A']
+        train_adj.setdiag(0)
+        train_adj.eliminate_zeros()
+        all_pos_edges = torch.from_numpy(np.array(sp.triu(train_adj, k=1).nonzero())).long()
+        # Simple split for fallback
+        perm = torch.randperm(all_pos_edges.size(1))
+        val_size = int(all_pos_edges.size(1) * 0.1)
+        train_pos_edge_index = all_pos_edges[:, perm[val_size:]].to(model_device)
+        val_pos_edge_index = all_pos_edges[:, perm[:val_size]].to(model_device)
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    scheduler = ReduceLROnPlateau(optimizer, 'max', factor=0.5, patience=10, verbose=True)
     
     # Initialize metrics on the target device
-    auroc = AUROC(task="binary").to(model_device)
-    precision_metric = Precision(task="binary").to(model_device)
-    recall_metric = Recall(task="binary").to(model_device)
-    f1_metric = F1Score(task="binary").to(model_device)
+    train_auroc = AUROC(task="binary").to(model_device)
+    val_auroc = AUROC(task="binary").to(model_device)
+    
+    best_val_auc = 0
+    epochs_no_improve = 0
+    best_model_state = None
 
     print("Starting training...")
     for epoch in range(args.epochs):
         model.train()
         
-        perm = torch.randperm(pos_edge_index.size(1), device=model_device)
-
+        # --- Training Phase ---
+        perm = torch.randperm(train_pos_edge_index.size(1), device=model_device)
         total_loss = 0.0
-        
-        # Reset metrics at the start of each epoch
-        auroc.reset()
-        precision_metric.reset()
-        recall_metric.reset()
-        f1_metric.reset()
+        train_auroc.reset()
 
-        for i in tqdm(range(0, pos_edge_index.size(1), args.batch_size), desc=f"Epoch {epoch+1}"):
+        for i in tqdm(range(0, train_pos_edge_index.size(1), args.batch_size), desc=f"Epoch {epoch+1} [Train]"):
             batch_indices = perm[i:i+args.batch_size]
-            pos_batch = pos_edge_index[:, batch_indices]
+            pos_batch = train_pos_edge_index[:, batch_indices]
             
-            # Generate negative samples on the fly on the GPU
             neg_batch = negative_sampling(
-                edge_index=pos_edge_index,
+                edge_index=train_pos_edge_index, # Sample negatives from the whole graph
                 num_nodes=n_authors,
                 num_neg_samples=pos_batch.size(1) * args.neg_samples
             )
 
-            # Combine positive and negative samples for the batch
             idx_i = torch.cat([pos_batch[0], neg_batch[0]])
             idx_j = torch.cat([pos_batch[1], neg_batch[1]])
             labels = torch.cat([
@@ -97,7 +109,6 @@ def main(args):
             
             bce_loss = F.binary_cross_entropy(preds, labels)
             
-            # Add entropy to encourage diverse weights
             weights_softmax = F.softmax(model.feature_weights, dim=1)
             entropy = -torch.sum(weights_softmax * torch.log(weights_softmax + 1e-7))
             
@@ -106,35 +117,54 @@ def main(args):
             loss.backward()
             optimizer.step()
 
-            total_loss += loss.item() * (pos_batch.size(1) + neg_batch.size(1))
-            
-            # Update metrics with the current batch's results
-            auroc.update(preds, labels)
-            precision_metric.update(preds, labels)
-            recall_metric.update(preds, labels)
-            f1_metric.update(preds, labels)
+            total_loss += loss.item()
+            train_auroc.update(preds, labels)
 
-        avg_loss = total_loss / (pos_edge_index.size(1) * (1 + args.neg_samples))
-        
-        # Compute final metrics for the epoch
-        epoch_auc = auroc.compute()
-        epoch_precision = precision_metric.compute()
-        epoch_recall = recall_metric.compute()
-        epoch_f1 = f1_metric.compute()
-        
-        print(f"Epoch {epoch+1}/{args.epochs} | Loss: {avg_loss:.4f} | AUC: {epoch_auc:.4f} | Precision: {epoch_precision:.4f} | Recall: {epoch_recall:.4f} | F1: {epoch_f1:.4f}")
+        avg_loss = total_loss / (len(range(0, train_pos_edge_index.size(1), args.batch_size)))
+        epoch_train_auc = train_auroc.compute()
 
-        # --- Debug: Print learned coefficients ---
+        # --- Validation Phase ---
+        model.eval()
+        val_auroc.reset()
         with torch.no_grad():
-            weights_softmax = F.softmax(model.feature_weights, dim=1)
-            # Format the meta-path weights for readability
-            weights_str = "\n".join([f"    {path}: {weights.cpu().numpy()}" for path, weights in zip(args.meta_paths, weights_softmax)])
-            print(f"  Feature Weights (softmaxed over powers):")
-            print(weights_str)
-            print(f"  Intercept: {model.intercept.item():.4f} | Slope: {model.slope.item():.4f}")
-        # --- End Debug ---
+            for i in tqdm(range(0, val_pos_edge_index.size(1), args.batch_size), desc=f"Epoch {epoch+1} [Val]"):
+                pos_batch = val_pos_edge_index[:, i:i+args.batch_size]
+                neg_batch = negative_sampling(
+                    edge_index=train_pos_edge_index, # IMPORTANT: still sample negatives from the whole graph space
+                    num_nodes=n_authors,
+                    num_neg_samples=pos_batch.size(1) * args.neg_samples
+                )
+                idx_i = torch.cat([pos_batch[0], neg_batch[0]])
+                idx_j = torch.cat([pos_batch[1], neg_batch[1]])
+                labels = torch.cat([torch.ones(pos_batch.size(1)), torch.zeros(neg_batch.size(1))]).to(model_device)
+                
+                preds = model(idx_i, idx_j)
+                val_auroc.update(preds, labels)
+        
+        epoch_val_auc = val_auroc.compute()
+        scheduler.step(epoch_val_auc)
 
-    print("Training finished.")
+        print(f"Epoch {epoch+1}/{args.epochs} | Loss: {avg_loss:.4f} | Train AUC: {epoch_train_auc:.4f} | Val AUC: {epoch_val_auc:.4f}")
+        
+        if epoch_val_auc > best_val_auc:
+            best_val_auc = epoch_val_auc
+            epochs_no_improve = 0
+            best_model_state = copy.deepcopy(model.state_dict())
+            print(f"  New best validation AUC: {best_val_auc:.4f}. Saving model state.")
+        else:
+            epochs_no_improve += 1
+        
+        if epochs_no_improve >= args.patience:
+            print(f"Validation AUC did not improve for {args.patience} epochs. Early stopping.")
+            break
+    
+    print(f"Training finished. Best validation AUC: {best_val_auc:.4f}")
+
+    # Load the best model state for final embedding generation and saving
+    if best_model_state:
+        print("Loading best model state...")
+        model.load_state_dict(best_model_state)
+    
     model.eval()
 
     if args.output:
@@ -173,6 +203,8 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility.')
     parser.add_argument('--cache-dir', type=str, default='./matrix_cache', help='Directory to cache computed meta-path matrices.')
     parser.add_argument('--save-model-path', type=str, default='fastrp_model.pth', help='Path to save the trained model checkpoint.')
+    parser.add_argument('--edge-split', type=str, default=None, help='Path to the pre-computed edge split file.')
+    parser.add_argument('--patience', type=int, default=20, help='Number of epochs to wait for validation AUC improvement before early stopping.')
     
     args = parser.parse_args()
     main(args) 
