@@ -122,6 +122,16 @@ def main(args):
         
         print(f"Epoch {epoch+1}/{args.epochs} | Loss: {avg_loss:.4f} | AUC: {epoch_auc:.4f} | Precision: {epoch_precision:.4f} | Recall: {epoch_recall:.4f}")
 
+        # --- Debug: Print learned coefficients ---
+        with torch.no_grad():
+            weights_softmax = F.softmax(model.feature_weights, dim=1)
+            # Format the meta-path weights for readability
+            weights_str = "\n".join([f"    {path}: {weights.cpu().numpy()}" for path, weights in zip(args.meta_paths, weights_softmax)])
+            print(f"  Feature Weights (softmaxed over powers):")
+            print(weights_str)
+            print(f"  Intercept: {model.intercept.item():.4f} | Slope: {model.slope.item():.4f}")
+        # --- End Debug ---
+
     print("Training finished.")
     model.eval()
 
