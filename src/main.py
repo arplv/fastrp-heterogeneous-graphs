@@ -4,7 +4,7 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 from torch_geometric.utils import negative_sampling
-from torchmetrics import AUROC, Precision, Recall
+from torchmetrics import AUROC, Precision, Recall, F1Score
 from pathlib import Path
 from tqdm import tqdm
 
@@ -57,6 +57,7 @@ def main(args):
     auroc = AUROC(task="binary").to(model_device)
     precision_metric = Precision(task="binary").to(model_device)
     recall_metric = Recall(task="binary").to(model_device)
+    f1_metric = F1Score(task="binary").to(model_device)
 
     print("Starting training...")
     for epoch in range(args.epochs):
@@ -70,6 +71,7 @@ def main(args):
         auroc.reset()
         precision_metric.reset()
         recall_metric.reset()
+        f1_metric.reset()
 
         for i in tqdm(range(0, pos_edge_index.size(1), args.batch_size), desc=f"Epoch {epoch+1}"):
             batch_indices = perm[i:i+args.batch_size]
@@ -110,6 +112,7 @@ def main(args):
             auroc.update(preds, labels)
             precision_metric.update(preds, labels)
             recall_metric.update(preds, labels)
+            f1_metric.update(preds, labels)
 
         avg_loss = total_loss / (pos_edge_index.size(1) * (1 + args.neg_samples))
         
@@ -117,8 +120,9 @@ def main(args):
         epoch_auc = auroc.compute()
         epoch_precision = precision_metric.compute()
         epoch_recall = recall_metric.compute()
+        epoch_f1 = f1_metric.compute()
         
-        print(f"Epoch {epoch+1}/{args.epochs} | Loss: {avg_loss:.4f} | AUC: {epoch_auc:.4f} | Precision: {epoch_precision:.4f} | Recall: {epoch_recall:.4f}")
+        print(f"Epoch {epoch+1}/{args.epochs} | Loss: {avg_loss:.4f} | AUC: {epoch_auc:.4f} | Precision: {epoch_precision:.4f} | Recall: {epoch_recall:.4f} | F1: {epoch_f1:.4f}")
 
         # --- Debug: Print learned coefficients ---
         with torch.no_grad():
