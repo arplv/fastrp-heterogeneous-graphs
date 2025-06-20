@@ -135,7 +135,7 @@ def main(args):
 
     if args.output:
         print(f"Computing and saving final embeddings to {args.output}...")
-        final_embeddings = model.get_embedding().detach().cpu()
+        final_embeddings = model._mixed_embedding().detach().cpu()
         torch.save(final_embeddings, args.output)
         print("Embeddings saved.")
 
