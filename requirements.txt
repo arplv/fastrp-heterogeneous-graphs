@@ -7,4 +7,5 @@ numba
 umap-learn
 matplotlib
 torch-geometric
-torchmetrics 
+torchmetrics
+adjustText 
