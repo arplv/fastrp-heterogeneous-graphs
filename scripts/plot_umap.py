@@ -12,10 +12,33 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import scipy.sparse as sp
 import torch
 import umap
 from sklearn.preprocessing import normalize
 from adjustText import adjust_text
+
+def load_coauthorship(path: Path, n_authors: int) -> sp.csr_matrix:
+    """Loads the symmetric co-authorship graph from a 1-based edge list."""
+    rows, cols = [], []
+    if not path.exists():
+        print(f"Warning: Co-authorship file not found at '{path}'. Cannot apply --min-coauthors filter.")
+        return None
+    with open(path, 'r', encoding='latin-1') as f:
+        for line in f:
+            try:
+                u, v, *w = line.strip().split()
+                # Files are 1-based, so subtract 1 for 0-based indexing
+                rows.append(int(u) - 1)
+                cols.append(int(v) - 1)
+            except (ValueError, IndexError):
+                continue
+    # Symmetrize the matrix by adding both (u, v) and (v, u)
+    all_rows = rows + cols
+    all_cols = cols + rows
+    # Use coo_matrix for efficient creation, then convert to csr
+    mat = sp.coo_matrix((np.ones(len(all_rows)), (all_rows, all_cols)), shape=(n_authors, n_authors))
+    return mat.tocsr()
 
 def load_labels(label_path: Path) -> tuple[dict[int, str], dict[str, int]]:
     """Loads author labels from a tab-separated file (author_id<tab>label_string)."""
@@ -76,8 +99,25 @@ def main(args):
     author_id_to_label_str, label_str_to_int = load_labels(args.labels)
     id_to_name = load_names(args.names) if args.names else {}
 
-    # --- 2. Pre-processing ---
+    # --- 2. Pre-processing & Filtering ---
     print("Pre-processing data...")
+    n_authors = embeddings.shape[0]
+
+    # Create a mask to filter authors based on the minimum number of co-authorships
+    if args.min_coauthors > 0:
+        print(f"Will only visualize authors with at least {args.min_coauthors} co-authorships.")
+        coauthorship_path = args.data_dir / 'AA.txt'
+        adj_matrix = load_coauthorship(coauthorship_path, n_authors)
+        if adj_matrix is not None:
+            degrees = np.array(adj_matrix.sum(axis=1)).flatten()
+            plot_mask = degrees >= args.min_coauthors
+            print(f"Applying filter: {plot_mask.sum()} of {n_authors} authors will be shown.")
+        else:
+            # If AA.txt not found, don't filter
+            plot_mask = np.ones(n_authors, dtype=bool)
+    else:
+        plot_mask = np.ones(n_authors, dtype=bool)
+
     max_author_id = max(author_id_to_label_str.keys())
     if embeddings.shape[0] <= max_author_id:
         print(f"Error: The number of embeddings ({embeddings.shape[0]}) is less than the "
@@ -138,12 +178,14 @@ def main(args):
     # Create colormap
     cmap = plt.get_cmap('tab20', len(label_str_to_int))
 
-    # Plot unlabeled points
-    ax.scatter(embeddings_2d[point_colors == -1, 0], embeddings_2d[point_colors == -1, 1], s=5, color='lightgray', alpha=0.6)
+    # Plot unlabeled points that meet the filter criteria
+    unlabeled_mask = (point_colors == -1) & plot_mask
+    ax.scatter(embeddings_2d[unlabeled_mask, 0], embeddings_2d[unlabeled_mask, 1], s=5, color='lightgray', alpha=0.6)
 
-    # Plot labeled points
+    # Plot labeled points that meet the filter criteria
     for label_str, label_int in label_str_to_int.items():
-        mask = point_colors == label_int
+        # Combine the label mask with the co-authorship filter mask
+        mask = (point_colors == label_int) & plot_mask
         if np.any(mask):
             # Use the actual label string for the legend
             ax.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], s=10, color=cmap(label_int), label=int_to_label_str.get(label_int, label_str), alpha=0.8)
@@ -158,7 +200,8 @@ def main(args):
         for raw_author_id in args.annotate:
             # User provides 1-based ID, convert to 0-based index
             author_id = raw_author_id - 1
-            if 0 <= author_id < num_embeddings:
+            # Check if author is within bounds and meets the co-authorship filter
+            if 0 <= author_id < num_embeddings and plot_mask[author_id]:
                 label = id_to_name.get(author_id, f"ID: {raw_author_id}")
                 texts.append(ax.text(embeddings_2d[author_id, 0], embeddings_2d[author_id, 1], label,
                                      fontsize=9, ha='center'))
@@ -197,6 +240,10 @@ if __name__ == '__main__':
                         help="Path to the tab-separated author labels file (author_id<tab>label).")
     parser.add_argument('--names', type=Path,
                         help="Optional path to author names file (author_id<tab>name).")
+    parser.add_argument('--data-dir', type=Path, default='data',
+                        help="Directory containing the co-authorship file (AA.txt).")
+    parser.add_argument('--min-coauthors', type=int, default=10,
+                        help="Minimum number of co-authorships required to be visualized.")
     parser.add_argument('--annotate', type=lambda s: [int(item) for item in s.split(',')],
                         help="Optional comma-separated list of 1-based author IDs to annotate in the plot.")
     parser.add_argument('--output', type=Path,
