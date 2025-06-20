@@ -9,6 +9,7 @@ from pathlib import Path
 from tqdm import tqdm
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import copy
+import scipy.sparse as sp
 
 from data_loader import load_data
 from model import FastRPModel
