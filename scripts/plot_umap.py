@@ -15,6 +15,7 @@ import numpy as np
 import torch
 import umap
 from sklearn.preprocessing import normalize
+from adjustText import adjust_text
 
 def load_labels(label_path: Path) -> tuple[dict[int, str], dict[str, int]]:
     """Loads author labels from a tab-separated file (author_id<tab>label_string)."""
@@ -104,6 +105,9 @@ def main(args):
     # Determine colors for each point
     num_embeddings = embeddings_2d.shape[0]
     point_colors = np.full(num_embeddings, -1, dtype=int)
+    # Create a reverse mapping from integer to the string label for the legend
+    int_to_label_str = {v: k for k, v in label_str_to_int.items()}
+
     for author_id, label_str in author_id_to_label_str.items():
         if author_id < num_embeddings:
             point_colors[author_id] = label_str_to_int[label_str]
@@ -141,7 +145,8 @@ def main(args):
     for label_str, label_int in label_str_to_int.items():
         mask = point_colors == label_int
         if np.any(mask):
-            ax.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], s=10, color=cmap(label_int), label=label_str, alpha=0.8)
+            # Use the actual label string for the legend
+            ax.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], s=10, color=cmap(label_int), label=int_to_label_str.get(label_int, label_str), alpha=0.8)
 
     # Add legend
     ax.legend(title="Research Fields", bbox_to_anchor=(1.02, 1), loc='upper left')
@@ -149,16 +154,21 @@ def main(args):
     # Add annotations
     if args.annotate:
         print(f"Annotating authors: {args.annotate}")
+        texts = []
         for raw_author_id in args.annotate:
             # User provides 1-based ID, convert to 0-based index
             author_id = raw_author_id - 1
             if 0 <= author_id < num_embeddings:
                 label = id_to_name.get(author_id, f"ID: {raw_author_id}")
-                ax.text(embeddings_2d[author_id, 0], embeddings_2d[author_id, 1], label,
-                        fontsize=9, fontweight='bold', ha='center', va='bottom',
-                        bbox=dict(boxstyle='round,pad=0.2', fc='yellow', alpha=0.7))
+                texts.append(ax.text(embeddings_2d[author_id, 0], embeddings_2d[author_id, 1], label,
+                                     fontsize=9, ha='center'))
             else:
                 print(f"Warning: Annotation ID {raw_author_id} is out of bounds. Skipping.")
+        
+        # Auto-adjust text to avoid overlap
+        if texts:
+            print("Adjusting text labels to prevent overlap...")
+            adjust_text(texts, arrowprops=dict(arrowstyle='->', color='black', lw=0.5))
 
     # --- 5. Final Touches & Save/Show ---
     title = f"UMAP Projection of {embeddings.shape[1]}-D Embeddings\n(n_neighbors={umap_params['n_neighbors']}, min_dist={umap_params['min_dist']})"
