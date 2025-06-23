@@ -136,4 +136,4 @@ class FastRPModel(nn.Module):
         dist_sq = ((zi - zj) ** 2).sum(dim=1)
         
         logits = self.intercept - self.slope * dist_sq
-        return torch.sigmoid(logits) 
+        return logits 

@@ -185,9 +185,11 @@ def main(args):
             ]).to(model_device)
 
             optimizer.zero_grad()
-            preds = model(idx_i, idx_j)
+            logits = model(idx_i, idx_j)
             
-            bce_loss = F.binary_cross_entropy(preds, labels)
+            # Use weighted BCE loss to handle class imbalance
+            pos_weight = torch.tensor([args.neg_samples], device=model_device)
+            bce_loss = F.binary_cross_entropy_with_logits(logits, labels, pos_weight=pos_weight)
             
             weights_softmax = F.softmax(model.feature_weights, dim=1)
             entropy = -torch.sum(weights_softmax * torch.log(weights_softmax + 1e-7))
@@ -200,11 +202,11 @@ def main(args):
             total_loss += loss.item()
             
             # Update all train metrics
-            metrics['train_auroc'].update(preds, labels)
-            metrics['train_acc'].update(preds, labels)
-            metrics['train_precision'].update(preds, labels)
-            metrics['train_recall'].update(preds, labels)
-            metrics['train_f1'].update(preds, labels)
+            metrics['train_auroc'].update(logits, labels)
+            metrics['train_acc'].update(logits, labels)
+            metrics['train_precision'].update(logits, labels)
+            metrics['train_recall'].update(logits, labels)
+            metrics['train_f1'].update(logits, labels)
 
         avg_loss = total_loss / (len(range(0, train_pos_edge_index.size(1), args.batch_size)))
         metrics_history['train_loss'].append(avg_loss)
@@ -234,13 +236,13 @@ def main(args):
                 idx_j = torch.cat([pos_batch[1], neg_batch[1]])
                 labels = torch.cat([torch.ones(pos_batch.size(1)), torch.zeros(neg_batch.size(1))]).to(model_device)
                 
-                preds = model(idx_i, idx_j)
+                logits = model(idx_i, idx_j)
                 # Update all val metrics
-                metrics['val_auroc'].update(preds, labels)
-                metrics['val_acc'].update(preds, labels)
-                metrics['val_precision'].update(preds, labels)
-                metrics['val_recall'].update(preds, labels)
-                metrics['val_f1'].update(preds, labels)
+                metrics['val_auroc'].update(logits, labels)
+                metrics['val_acc'].update(logits, labels)
+                metrics['val_precision'].update(logits, labels)
+                metrics['val_recall'].update(logits, labels)
+                metrics['val_f1'].update(logits, labels)
         
         epoch_val_auc = metrics['val_auroc'].compute().item()
         metrics_history['val_auc'].append(epoch_val_auc)
