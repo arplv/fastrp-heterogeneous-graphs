@@ -147,6 +147,11 @@ def main(args):
 
         print(f"Epoch {epoch+1}/{args.epochs} | Loss: {avg_loss:.4f} | Train AUC: {epoch_train_auc:.4f} | Val AUC: {epoch_val_auc:.4f}")
         
+        with torch.no_grad():
+            weights_softmax = F.softmax(model.feature_weights.flatten(), dim=0).cpu().numpy()
+            print(f"  Slope: {model.slope.item():.4f} | Intercept: {model.intercept.item():.4f}")
+            print(f"  Feature Weights (softmax): {np.array2string(weights_softmax, precision=4, suppress_small=True)}")
+
         if epoch_val_auc > best_val_auc:
             best_val_auc = epoch_val_auc
             epochs_no_improve = 0
