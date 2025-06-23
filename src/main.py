@@ -4,15 +4,78 @@ import torch
 import torch.optim as optim
 import torch.nn.functional as F
 from torch_geometric.utils import negative_sampling
-from torchmetrics import AUROC, Precision, Recall, F1Score
+from torchmetrics import AUROC, Precision, Recall, F1Score, Accuracy
 from pathlib import Path
 from tqdm import tqdm
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import copy
 import scipy.sparse as sp
+import matplotlib.pyplot as plt
 
 from data_loader import load_data
 from model import FastRPModel
+
+def plot_metrics(metrics_history, output_path):
+    """Plots training and validation metrics."""
+    fig, axs = plt.subplots(3, 2, figsize=(15, 15))
+    fig.suptitle('Training and Validation Metrics Over Epochs')
+
+    epochs = range(1, len(metrics_history['train_loss']) + 1)
+
+    # Loss
+    axs[0, 0].plot(epochs, metrics_history['train_loss'], 'b-', label='Training Loss')
+    axs[0, 0].set_title('Training Loss')
+    axs[0, 0].set_xlabel('Epochs')
+    axs[0, 0].set_ylabel('Loss')
+    axs[0, 0].legend()
+
+    # AUROC
+    axs[0, 1].plot(epochs, metrics_history['train_auc'], 'b-', label='Training AUC')
+    axs[0, 1].plot(epochs, metrics_history['val_auc'], 'r-', label='Validation AUC')
+    axs[0, 1].set_title('Area Under ROC Curve (AUC)')
+    axs[0, 1].set_xlabel('Epochs')
+    axs[0, 1].set_ylabel('AUC')
+    axs[0, 1].legend()
+    
+    # Accuracy
+    axs[1, 0].plot(epochs, metrics_history['train_acc'], 'b-', label='Training Accuracy')
+    axs[1, 0].plot(epochs, metrics_history['val_acc'], 'r-', label='Validation Accuracy')
+    axs[1, 0].set_title('Accuracy')
+    axs[1, 0].set_xlabel('Epochs')
+    axs[1, 0].set_ylabel('Accuracy')
+    axs[1, 0].legend()
+
+    # Precision
+    axs[1, 1].plot(epochs, metrics_history['train_precision'], 'b-', label='Training Precision')
+    axs[1, 1].plot(epochs, metrics_history['val_precision'], 'r-', label='Validation Precision')
+    axs[1, 1].set_title('Precision')
+    axs[1, 1].set_xlabel('Epochs')
+    axs[1, 1].set_ylabel('Precision')
+    axs[1, 1].legend()
+
+    # Recall
+    axs[2, 0].plot(epochs, metrics_history['train_recall'], 'b-', label='Training Recall')
+    axs[2, 0].plot(epochs, metrics_history['val_recall'], 'r-', label='Validation Recall')
+    axs[2, 0].set_title('Recall')
+    axs[2, 0].set_xlabel('Epochs')
+    axs[2, 0].set_ylabel('Recall')
+    axs[2, 0].legend()
+
+    # F1 Score
+    axs[2, 1].plot(epochs, metrics_history['train_f1'], 'b-', label='Training F1-Score')
+    axs[2, 1].plot(epochs, metrics_history['val_f1'], 'r-', label='Validation F1-Score')
+    axs[2, 1].set_title('F1 Score')
+    axs[2, 1].set_xlabel('Epochs')
+    axs[2, 1].set_ylabel('F1 Score')
+    axs[2, 1].legend()
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    
+    plot_dir = Path(output_path).parent
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    
+    plt.savefig(output_path)
+    print(f"Metrics plot saved to {output_path}")
 
 def main(args):
     # Setup
@@ -72,8 +135,24 @@ def main(args):
     scheduler = ReduceLROnPlateau(optimizer, 'max', factor=0.5, patience=10)
     
     # Initialize metrics on the target device
-    train_auroc = AUROC(task="binary").to(model_device)
-    val_auroc = AUROC(task="binary").to(model_device)
+    metrics = {
+        'train_auroc': AUROC(task="binary").to(model_device),
+        'val_auroc': AUROC(task="binary").to(model_device),
+        'train_acc': Accuracy(task="binary").to(model_device),
+        'val_acc': Accuracy(task="binary").to(model_device),
+        'train_precision': Precision(task="binary").to(model_device),
+        'val_precision': Precision(task="binary").to(model_device),
+        'train_recall': Recall(task="binary").to(model_device),
+        'val_recall': Recall(task="binary").to(model_device),
+        'train_f1': F1Score(task="binary").to(model_device),
+        'val_f1': F1Score(task="binary").to(model_device),
+    }
+
+    metrics_history = {
+        'train_loss': [], 'train_auc': [], 'val_auc': [],
+        'train_acc': [], 'val_acc': [], 'train_precision': [], 'val_precision': [],
+        'train_recall': [], 'val_recall': [], 'train_f1': [], 'val_f1': []
+    }
     
     best_val_auc = 0
     epochs_no_improve = 0
@@ -86,7 +165,7 @@ def main(args):
         # --- Training Phase ---
         perm = torch.randperm(train_pos_edge_index.size(1), device=model_device)
         total_loss = 0.0
-        train_auroc.reset()
+        for metric in metrics.values(): metric.reset()
 
         for i in tqdm(range(0, train_pos_edge_index.size(1), args.batch_size), desc=f"Epoch {epoch+1} [Train]"):
             batch_indices = perm[i:i+args.batch_size]
@@ -119,14 +198,30 @@ def main(args):
             optimizer.step()
 
             total_loss += loss.item()
-            train_auroc.update(preds, labels)
+            
+            # Update all train metrics
+            metrics['train_auroc'].update(preds, labels)
+            metrics['train_acc'].update(preds, labels)
+            metrics['train_precision'].update(preds, labels)
+            metrics['train_recall'].update(preds, labels)
+            metrics['train_f1'].update(preds, labels)
 
         avg_loss = total_loss / (len(range(0, train_pos_edge_index.size(1), args.batch_size)))
-        epoch_train_auc = train_auroc.compute()
+        metrics_history['train_loss'].append(avg_loss)
+        metrics_history['train_auc'].append(metrics['train_auroc'].compute().item())
+        metrics_history['train_acc'].append(metrics['train_acc'].compute().item())
+        metrics_history['train_precision'].append(metrics['train_precision'].compute().item())
+        metrics_history['train_recall'].append(metrics['train_recall'].compute().item())
+        metrics_history['train_f1'].append(metrics['train_f1'].compute().item())
 
         # --- Validation Phase ---
         model.eval()
-        val_auroc.reset()
+        # Reset only validation metrics, train metrics were computed
+        metrics['val_auroc'].reset()
+        metrics['val_acc'].reset()
+        metrics['val_precision'].reset()
+        metrics['val_recall'].reset()
+        metrics['val_f1'].reset()
         with torch.no_grad():
             for i in tqdm(range(0, val_pos_edge_index.size(1), args.batch_size), desc=f"Epoch {epoch+1} [Val]"):
                 pos_batch = val_pos_edge_index[:, i:i+args.batch_size]
@@ -140,13 +235,25 @@ def main(args):
                 labels = torch.cat([torch.ones(pos_batch.size(1)), torch.zeros(neg_batch.size(1))]).to(model_device)
                 
                 preds = model(idx_i, idx_j)
-                val_auroc.update(preds, labels)
+                # Update all val metrics
+                metrics['val_auroc'].update(preds, labels)
+                metrics['val_acc'].update(preds, labels)
+                metrics['val_precision'].update(preds, labels)
+                metrics['val_recall'].update(preds, labels)
+                metrics['val_f1'].update(preds, labels)
         
-        epoch_val_auc = val_auroc.compute()
+        epoch_val_auc = metrics['val_auroc'].compute().item()
+        metrics_history['val_auc'].append(epoch_val_auc)
+        metrics_history['val_acc'].append(metrics['val_acc'].compute().item())
+        metrics_history['val_precision'].append(metrics['val_precision'].compute().item())
+        metrics_history['val_recall'].append(metrics['val_recall'].compute().item())
+        metrics_history['val_f1'].append(metrics['val_f1'].compute().item())
+
         scheduler.step(epoch_val_auc)
 
-        print(f"Epoch {epoch+1}/{args.epochs} | Loss: {avg_loss:.4f} | Train AUC: {epoch_train_auc:.4f} | Val AUC: {epoch_val_auc:.4f}")
-        
+        print(f"Epoch {epoch+1}/{args.epochs} | Loss: {metrics_history['train_loss'][-1]:.4f} | Train AUC: {metrics_history['train_auc'][-1]:.4f} | Val AUC: {metrics_history['val_auc'][-1]:.4f}")
+        print(f"  Val Accuracy: {metrics_history['val_acc'][-1]:.4f} | Val Precision: {metrics_history['val_precision'][-1]:.4f} | Val Recall: {metrics_history['val_recall'][-1]:.4f} | Val F1: {metrics_history['val_f1'][-1]:.4f}")
+
         with torch.no_grad():
             weights_softmax = F.softmax(model.feature_weights.flatten(), dim=0).cpu().numpy()
             print(f"  Slope: {model.slope.item():.4f} | Intercept: {model.intercept.item():.4f}")
@@ -165,6 +272,9 @@ def main(args):
             break
     
     print(f"Training finished. Best validation AUC: {best_val_auc:.4f}")
+
+    # Plot metrics
+    plot_metrics(metrics_history, args.plot_path)
 
     # Load the best model state for final embedding generation and saving
     if best_model_state:
@@ -211,6 +321,7 @@ if __name__ == '__main__':
     parser.add_argument('--save-model-path', type=str, default='fastrp_model.pth', help='Path to save the trained model checkpoint.')
     parser.add_argument('--edge-split', type=str, default=None, help='Path to the pre-computed edge split file.')
     parser.add_argument('--patience', type=int, default=20, help='Number of epochs to wait for validation AUC improvement before early stopping.')
+    parser.add_argument('--plot-path', type=str, default='plots/training_metrics.png', help='Path to save the training metrics plot.')
     
     args = parser.parse_args()
     main(args) 
