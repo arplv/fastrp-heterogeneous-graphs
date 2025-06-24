@@ -51,26 +51,49 @@ class FastRPModel(nn.Module):
         self.intercept = nn.Parameter(torch.tensor(0.0))
         self.slope = nn.Parameter(torch.tensor(1.0))
         
-        # --- Feature Generation (Pre-computation) ---
-        R_prime = self._create_random_projection_matrix(n_authors, dim, alpha, relations['A']['A'].sum(axis=1).A.flatten(), s=s)
+        # --- Feature Generation (Efficient Pre-computation) ---
+        # Create the initial random projection matrix.
+        R_prime = self._create_random_projection_matrix(
+            n_authors, dim, alpha, relations['A']['A'].sum(axis=1).A.flatten(), s=s
+        )
 
         features_list = []
         for path_str in meta_paths:
-            M_norm = self._compute_normalized_meta_path_matrix(path_str, relations, beta)
+            print(f"  Computing features for meta-path: {path_str}")
+            if '@' in path_str:
+                raise NotImplementedError("Element-wise product of meta-paths ('@') is not supported in this version.")
             
-            current_U_sparse = M_norm @ R_prime
-            
-            # First power
-            current_U_tensor = torch.from_numpy(current_U_sparse.toarray()).float()
-            current_U_tensor = F.normalize(current_U_tensor, p=2, dim=1)
-            features_list.append(current_U_tensor)
+            # Deconstruct the path into a sequence of normalized hop matrices (M_1, M_2, ... M_k).
+            path_parts = list(path_str)
+            hop_matrices = []
+            for i in range(len(path_parts) - 1):
+                matrix = self._hop(relations[path_parts[i]][path_parts[i+1]].copy(), beta)
+                hop_matrices.append(matrix)
 
-            # Higher powers
-            for _ in range(num_powers - 1):
-                current_U_sparse = M_norm @ current_U_sparse
-                current_U_tensor = torch.from_numpy(current_U_sparse.toarray()).float()
-                current_U_tensor = F.normalize(current_U_tensor, p=2, dim=1)
-                features_list.append(current_U_tensor)
+            # Efficiently compute features for each power of the meta-path matrix M.
+            # We compute U_i = M^i @ R' by iteratively applying M.
+            # U_i = M @ U_{i-1}, where U_0 = R'.
+            # The multiplication M @ U is done efficiently as (M_1 @ ... @ M_k) @ U,
+            # applying matrices from right-to-left to avoid forming the large (N,N) M matrix.
+            
+            # U_prev_sparse stores the sparse result of the previous power, starting with R'.
+            U_prev_sparse = R_prime
+            
+            for _ in range(num_powers):
+                # Calculate U_curr = M @ U_prev by applying hop matrices in reverse order.
+                U_curr_sparse = U_prev_sparse
+                for hop_matrix in reversed(hop_matrices):
+                    U_curr_sparse = hop_matrix @ U_curr_sparse
+                
+                # Convert the sparse result to a dense, normalized tensor for the model.
+                # The .toarray() call is memory-intensive but necessary here. The key efficiency
+                # gain is avoiding the (N, N) matrix construction and multiplication.
+                U_tensor = torch.from_numpy(U_curr_sparse.toarray()).float()
+                U_tensor = F.normalize(U_tensor, p=2, dim=1)
+                features_list.append(U_tensor)
+                
+                # The next iteration will build upon the sparse result of this one.
+                U_prev_sparse = U_curr_sparse
         
         # Shape: (F, N, D) where F = num_paths * num_powers
         self.features = torch.stack(features_list, dim=0).to(self.device)
@@ -105,22 +128,6 @@ class FastRPModel(nn.Module):
         
         normalizer = sp.diags(inv_degree)
         return normalizer @ mat
-
-    def _compute_normalized_meta_path_matrix(self, path_str: str, relations: Dict[str, Dict[str, sp.csr_matrix]], beta: float):
-        print(f"  Computing features for meta-path: {path_str}")
-        if '@' in path_str:
-            raise NotImplementedError("Element-wise product of meta-paths ('@') is not supported in this version.")
-
-        parts = list(path_str)
-        # Initialize with the first relation, normalized
-        final_mat = self._hop(relations[parts[0]][parts[1]].copy(), beta)
-        
-        # Chain multiplications, normalizing at each hop
-        for i in range(1, len(parts) - 1):
-            next_mat = self._hop(relations[parts[i]][parts[i+1]].copy(), beta)
-            final_mat = final_mat @ next_mat
-        
-        return final_mat
 
     def _mixed_embedding(self):
         # weights: (n_paths, n_powers) -> flatten -> (F)
