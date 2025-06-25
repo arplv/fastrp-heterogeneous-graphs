@@ -232,9 +232,7 @@ def main(args):
 
     # --- 4. Visualization ---
     print("Generating plot...")
-    fig = plt.figure(figsize=(22, 10))
-    ax1 = fig.add_subplot(1, 2, 1)
-    ax2 = fig.add_subplot(1, 2, 2, projection='3d')
+    fig, axes = plt.subplots(2, 2, figsize=(22, 18))
 
     # Determine colors for each point
     num_embeddings = embeddings_umap.shape[0]
@@ -270,25 +268,40 @@ def main(args):
         int_to_label_str[other_label_id] = 'Other' # Also update reverse mapping
         legend_label_strs.append('Other')
 
-    # Plot UMAP
+    # Plot UMAP (top-left)
+    ax1 = axes[0, 0]
     umap_title = f"UMAP Projection\n(n_neighbors={umap_params['n_neighbors']}, min_dist={umap_params['min_dist']})"
     handles, labels = plot_2d_chart(ax1, umap_title, embeddings_umap, point_colors, plot_mask, label_str_to_int, area_names, id_to_name, args.annotate)
+    ax1.set_xlabel("UMAP Dimension 1")
+    ax1.set_ylabel("UMAP Dimension 2")
 
-    # Plot PCA
-    pca_title = f"PCA Projection (3 Components)\n(Total Explained Variance: {explained_variance.sum():.2%})"
-    plot_3d_chart(ax2, pca_title, embeddings_pca, point_colors, plot_mask, label_str_to_int, area_names)
+    # Plot PCA PC1 vs PC2 (top-right)
+    ax2 = axes[0, 1]
+    plot_2d_chart(ax2, "PCA Projection", embeddings_pca[:, [0, 1]], point_colors, plot_mask, label_str_to_int, area_names, id_to_name, args.annotate)
     ax2.set_xlabel(f"PC 1 ({explained_variance[0]:.2%})")
     ax2.set_ylabel(f"PC 2 ({explained_variance[1]:.2%})")
-    ax2.set_zlabel(f"PC 3 ({explained_variance[2]:.2%})")
+
+    # Plot PCA PC2 vs PC3 (bottom-left)
+    ax3 = axes[1, 0]
+    plot_2d_chart(ax3, "PCA Projection", embeddings_pca[:, [1, 2]], point_colors, plot_mask, label_str_to_int, area_names, id_to_name, args.annotate)
+    ax3.set_xlabel(f"PC 2 ({explained_variance[1]:.2%})")
+    ax3.set_ylabel(f"PC 3 ({explained_variance[2]:.2%})")
+
+    # Plot PCA PC1 vs PC3 (bottom-right)
+    ax4 = axes[1, 1]
+    plot_2d_chart(ax4, "PCA Projection", embeddings_pca[:, [0, 2]], point_colors, plot_mask, label_str_to_int, area_names, id_to_name, args.annotate)
+    ax4.set_xlabel(f"PC 1 ({explained_variance[0]:.2%})")
+    ax4.set_ylabel(f"PC 3 ({explained_variance[2]:.2%})")
 
     # --- 5. Final Touches & Save/Show ---
-    fig.suptitle(f"Embedding Visualization for {Path(args.embeddings).name} ({embeddings.shape[1]}-D)", fontsize=16)
+    total_explained_variance_str = f"Total Explained Variance (3 components): {explained_variance.sum():.2%}"
+    fig.suptitle(f"Embedding Visualization for {Path(args.embeddings).name} ({embeddings.shape[1]}-D)\n{total_explained_variance_str}", fontsize=16)
     
     # Add shared legend
     fig.legend(handles, labels, title="Research Fields", bbox_to_anchor=(1.0, 0.9), loc='upper left')
 
     # Adjust layout to make space for suptitle and legend
-    fig.tight_layout(rect=[0, 0, 0.9, 0.96])
+    fig.tight_layout(rect=[0, 0, 0.9, 0.95])
 
     # Ensure the output directory exists
     args.output.parent.mkdir(parents=True, exist_ok=True)
