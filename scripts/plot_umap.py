@@ -15,6 +15,7 @@ import numpy as np
 import scipy.sparse as sp
 import torch
 import umap
+from sklearn.decomposition import PCA
 from sklearn.preprocessing import normalize
 from adjustText import adjust_text
 
@@ -98,6 +99,49 @@ def load_names(names_path: Path) -> dict[int, str]:
         exit(1)
     return id_to_name
 
+def plot_single_chart(ax, title, embeddings_2d, point_colors, plot_mask, label_str_to_int, area_names, id_to_name, annotate_ids):
+    """Helper to draw one scatter plot (UMAP or PCA) on a given axes."""
+    ax.set_title(title, fontsize=12)
+    ax.set_xlabel("Dimension 1")
+    ax.set_ylabel("Dimension 2")
+    ax.grid(True, linestyle='--', alpha=0.6)
+
+    cmap = plt.get_cmap('tab20', len(label_str_to_int))
+
+    # Plot unlabeled points
+    unlabeled_mask = (point_colors == -1) & plot_mask
+    ax.scatter(embeddings_2d[unlabeled_mask, 0], embeddings_2d[unlabeled_mask, 1], s=5, color='lightgray', alpha=0.6)
+
+    # Plot labeled points
+    handles, labels = [], []
+    sorted_labels = sorted(label_str_to_int.items(), key=lambda item: area_names.get(item[0], item[0]))
+
+    for label_str, label_int in sorted_labels:
+        mask = (point_colors == label_int) & plot_mask
+        if np.any(mask):
+            legend_label = area_names.get(label_str, label_str)
+            scatter = ax.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], s=10, color=cmap(label_int), label=legend_label, alpha=0.8)
+            handles.append(scatter)
+            labels.append(legend_label)
+
+    # Annotations
+    if annotate_ids:
+        texts = []
+        num_embeddings = embeddings_2d.shape[0]
+        for raw_author_id in annotate_ids:
+            author_id = raw_author_id - 1
+            if 0 <= author_id < num_embeddings and plot_mask[author_id]:
+                label = id_to_name.get(author_id, f"ID: {raw_author_id}")
+                texts.append(ax.text(embeddings_2d[author_id, 0], embeddings_2d[author_id, 1], label,
+                                     fontsize=9, ha='center',
+                                     bbox=dict(facecolor='white', alpha=0.5, boxstyle='round,pad=0.1')))
+            else:
+                print(f"Warning: Annotation ID {raw_author_id} is out of bounds or filtered. Skipping.")
+        
+        if texts:
+            adjust_text(texts, ax=ax, arrowprops=dict(arrowstyle='->', color='black', lw=0.5))
+    
+    return handles, labels
 
 def main(args):
     """Main function to orchestrate loading, projecting, and plotting."""
@@ -145,22 +189,31 @@ def main(args):
     # L2 normalize embeddings for cosine distance
     embeddings_norm = normalize(embeddings, norm='l2', axis=1)
 
-    # --- 3. UMAP Projection ---
+    # --- 3. UMAP & PCA Projections ---
     print("Performing UMAP projection...")
     umap_params = {'n_neighbors': 15, 'min_dist': 0.5, 'metric': "euclidean"}
     reducer = umap.UMAP(**umap_params)
     
     start_time = time.time()
-    embeddings_2d = reducer.fit_transform(embeddings_norm)
+    embeddings_umap = reducer.fit_transform(embeddings_norm)
     end_time = time.time()
     print(f"UMAP projection took {end_time - start_time:.2f} seconds.")
 
+    print("Performing PCA projection...")
+    pca = PCA(n_components=2)
+    start_time = time.time()
+    embeddings_pca = pca.fit_transform(embeddings_norm)
+    end_time = time.time()
+    explained_variance = pca.explained_variance_ratio_
+    print(f"PCA projection took {end_time - start_time:.2f} seconds.")
+    print(f"PCA Explained Variance: PC1={explained_variance[0]:.2%}, PC2={explained_variance[1]:.2%}, Total={explained_variance.sum():.2%}")
+
     # --- 4. Visualization ---
     print("Generating plot...")
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(22, 10))
 
     # Determine colors for each point
-    num_embeddings = embeddings_2d.shape[0]
+    num_embeddings = embeddings_umap.shape[0]
     point_colors = np.full(num_embeddings, -1, dtype=int)
     # Create a reverse mapping from integer to the string label for the legend
     int_to_label_str = {v: k for k, v in label_str_to_int.items()}
@@ -178,7 +231,7 @@ def main(args):
         top_14_labels = {label for label, count in label_counts.most_common(14)}
         
         # Remap non-top labels to a new "other" category
-        other_label_id = next_label_id = len(label_str_to_int)
+        other_label_id = len(label_str_to_int)
         legend_label_strs = []
         for label_str, label_int in label_str_to_int.items():
             if label_str in top_14_labels:
@@ -190,61 +243,34 @@ def main(args):
                         point_colors[author_id] = other_label_id
         
         label_str_to_int['Other'] = other_label_id
+        int_to_label_str[other_label_id] = 'Other' # Also update reverse mapping
         legend_label_strs.append('Other')
 
-    # Create colormap
-    cmap = plt.get_cmap('tab20', len(label_str_to_int))
+    # Plot UMAP
+    umap_title = f"UMAP Projection\n(n_neighbors={umap_params['n_neighbors']}, min_dist={umap_params['min_dist']})"
+    plot_single_chart(ax1, umap_title, embeddings_umap, point_colors, plot_mask, label_str_to_int, area_names, id_to_name, args.annotate)
 
-    # Plot unlabeled points that meet the filter criteria
-    unlabeled_mask = (point_colors == -1) & plot_mask
-    ax.scatter(embeddings_2d[unlabeled_mask, 0], embeddings_2d[unlabeled_mask, 1], s=5, color='lightgray', alpha=0.6)
-
-    # Plot labeled points that meet the filter criteria
-    for label_str, label_int in label_str_to_int.items():
-        # Combine the label mask with the co-authorship filter mask
-        mask = (point_colors == label_int) & plot_mask
-        if np.any(mask):
-            # Use the descriptive name if available, otherwise the original label string
-            legend_label = area_names.get(label_str, label_str)
-            ax.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], s=10, color=cmap(label_int), label=legend_label, alpha=0.8)
-
-    # Add legend
-    ax.legend(title="Research Fields", bbox_to_anchor=(1.02, 1), loc='upper left')
-
-    # Add annotations
-    if args.annotate:
-        print(f"Annotating authors: {args.annotate}")
-        texts = []
-        for raw_author_id in args.annotate:
-            # User provides 1-based ID, convert to 0-based index
-            author_id = raw_author_id - 1
-            # Check if author is within bounds and meets the co-authorship filter
-            if 0 <= author_id < num_embeddings and plot_mask[author_id]:
-                label = id_to_name.get(author_id, f"ID: {raw_author_id}")
-                texts.append(ax.text(embeddings_2d[author_id, 0], embeddings_2d[author_id, 1], label,
-                                     fontsize=9, ha='center'))
-            else:
-                print(f"Warning: Annotation ID {raw_author_id} is out of bounds. Skipping.")
-        
-        # Auto-adjust text to avoid overlap
-        if texts:
-            print("Adjusting text labels to prevent overlap...")
-            adjust_text(texts, arrowprops=dict(arrowstyle='->', color='black', lw=0.5))
+    # Plot PCA
+    pca_title = f"PCA Projection\n(Total Explained Variance: {explained_variance.sum():.2%})"
+    handles, labels = plot_single_chart(ax2, pca_title, embeddings_pca, point_colors, plot_mask, label_str_to_int, area_names, id_to_name, args.annotate)
+    ax2.set_xlabel(f"Principal Component 1 ({explained_variance[0]:.2%})")
+    ax2.set_ylabel(f"Principal Component 2 ({explained_variance[1]:.2%})")
 
     # --- 5. Final Touches & Save/Show ---
-    title = f"UMAP Projection of {embeddings.shape[1]}-D Embeddings\n(n_neighbors={umap_params['n_neighbors']}, min_dist={umap_params['min_dist']})"
-    ax.set_title(title, fontsize=14)
-    ax.set_xlabel("UMAP Dimension 1")
-    ax.set_ylabel("UMAP Dimension 2")
-    ax.grid(True, linestyle='--', alpha=0.6)
-    fig.tight_layout()
+    fig.suptitle(f"Embedding Visualization for {Path(args.embeddings).name} ({embeddings.shape[1]}-D)", fontsize=16)
+    
+    # Add shared legend
+    fig.legend(handles, labels, title="Research Fields", bbox_to_anchor=(1.0, 0.9), loc='upper left')
 
-    if args.output:
-        print(f"Saving figure to '{args.output}'")
-        plt.savefig(args.output, dpi=300, bbox_inches='tight')
-    else:
-        print("Displaying figure...")
-        plt.show()
+    # Adjust layout to make space for suptitle and legend
+    fig.tight_layout(rect=[0, 0, 0.9, 0.96])
+
+    # Ensure the output directory exists
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+
+    print(f"Saving figure to '{args.output}'")
+    plt.savefig(args.output, dpi=300, bbox_inches='tight')
+    print("Figure saved.")
 
 
 if __name__ == '__main__':
@@ -264,7 +290,7 @@ if __name__ == '__main__':
                         help="Minimum number of co-authorships required to be visualized.")
     parser.add_argument('--annotate', type=lambda s: [int(item) for item in s.split(',')],
                         help="Optional comma-separated list of 1-based author IDs to annotate in the plot.")
-    parser.add_argument('--output', type=Path,
-                        help="Optional path to save the output plot. If not provided, shows the plot.")
+    parser.add_argument('--output', type=Path, default='plots/umap_visualization.png',
+                        help="Path to save the output plot.")
     
     main(parser.parse_args()) 
