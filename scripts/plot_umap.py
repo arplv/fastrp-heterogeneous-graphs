@@ -99,8 +99,8 @@ def load_names(names_path: Path) -> dict[int, str]:
         exit(1)
     return id_to_name
 
-def plot_single_chart(ax, title, embeddings_2d, point_colors, plot_mask, label_str_to_int, area_names, id_to_name, annotate_ids):
-    """Helper to draw one scatter plot (UMAP or PCA) on a given axes."""
+def plot_2d_chart(ax, title, embeddings_2d, point_colors, plot_mask, label_str_to_int, area_names, id_to_name, annotate_ids):
+    """Helper to draw a 2D scatter plot on a given axes."""
     ax.set_title(title, fontsize=12)
     ax.set_xlabel("Dimension 1")
     ax.set_ylabel("Dimension 2")
@@ -142,6 +142,28 @@ def plot_single_chart(ax, title, embeddings_2d, point_colors, plot_mask, label_s
             adjust_text(texts, ax=ax, arrowprops=dict(arrowstyle='->', color='black', lw=0.5))
     
     return handles, labels
+
+def plot_3d_chart(ax, title, embeddings_3d, point_colors, plot_mask, label_str_to_int, area_names):
+    """Helper to draw a 3D scatter plot on a given axes."""
+    ax.set_title(title, fontsize=12)
+
+    cmap = plt.get_cmap('tab20', len(label_str_to_int))
+
+    # Plot unlabeled points
+    unlabeled_mask = (point_colors == -1) & plot_mask
+    ax.scatter(embeddings_3d[unlabeled_mask, 0], embeddings_3d[unlabeled_mask, 1], embeddings_3d[unlabeled_mask, 2],
+               s=5, color='lightgray', alpha=0.4)
+
+    # Plot labeled points
+    sorted_labels = sorted(label_str_to_int.items(), key=lambda item: area_names.get(item[0], item[0]))
+    for label_str, label_int in sorted_labels:
+        mask = (point_colors == label_int) & plot_mask
+        if np.any(mask):
+            legend_label = area_names.get(label_str, label_str)
+            ax.scatter(embeddings_3d[mask, 0], embeddings_3d[mask, 1], embeddings_3d[mask, 2],
+                       s=10, color=cmap(label_int), label=legend_label, alpha=0.8)
+    
+    # Annotations are omitted in 3D for clarity
 
 def main(args):
     """Main function to orchestrate loading, projecting, and plotting."""
@@ -200,17 +222,19 @@ def main(args):
     print(f"UMAP projection took {end_time - start_time:.2f} seconds.")
 
     print("Performing PCA projection...")
-    pca = PCA(n_components=2)
+    pca = PCA(n_components=3)
     start_time = time.time()
     embeddings_pca = pca.fit_transform(embeddings_norm)
     end_time = time.time()
     explained_variance = pca.explained_variance_ratio_
     print(f"PCA projection took {end_time - start_time:.2f} seconds.")
-    print(f"PCA Explained Variance: PC1={explained_variance[0]:.2%}, PC2={explained_variance[1]:.2%}, Total={explained_variance.sum():.2%}")
+    print(f"PCA Explained Variance: PC1={explained_variance[0]:.2%}, PC2={explained_variance[1]:.2%}, PC3={explained_variance[2]:.2%}, Total={explained_variance.sum():.2%}")
 
     # --- 4. Visualization ---
     print("Generating plot...")
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(22, 10))
+    fig = plt.figure(figsize=(22, 10))
+    ax1 = fig.add_subplot(1, 2, 1)
+    ax2 = fig.add_subplot(1, 2, 2, projection='3d')
 
     # Determine colors for each point
     num_embeddings = embeddings_umap.shape[0]
@@ -248,13 +272,14 @@ def main(args):
 
     # Plot UMAP
     umap_title = f"UMAP Projection\n(n_neighbors={umap_params['n_neighbors']}, min_dist={umap_params['min_dist']})"
-    plot_single_chart(ax1, umap_title, embeddings_umap, point_colors, plot_mask, label_str_to_int, area_names, id_to_name, args.annotate)
+    handles, labels = plot_2d_chart(ax1, umap_title, embeddings_umap, point_colors, plot_mask, label_str_to_int, area_names, id_to_name, args.annotate)
 
     # Plot PCA
-    pca_title = f"PCA Projection\n(Total Explained Variance: {explained_variance.sum():.2%})"
-    handles, labels = plot_single_chart(ax2, pca_title, embeddings_pca, point_colors, plot_mask, label_str_to_int, area_names, id_to_name, args.annotate)
-    ax2.set_xlabel(f"Principal Component 1 ({explained_variance[0]:.2%})")
-    ax2.set_ylabel(f"Principal Component 2 ({explained_variance[1]:.2%})")
+    pca_title = f"PCA Projection (3 Components)\n(Total Explained Variance: {explained_variance.sum():.2%})"
+    plot_3d_chart(ax2, pca_title, embeddings_pca, point_colors, plot_mask, label_str_to_int, area_names)
+    ax2.set_xlabel(f"PC 1 ({explained_variance[0]:.2%})")
+    ax2.set_ylabel(f"PC 2 ({explained_variance[1]:.2%})")
+    ax2.set_zlabel(f"PC 3 ({explained_variance[2]:.2%})")
 
     # --- 5. Final Touches & Save/Show ---
     fig.suptitle(f"Embedding Visualization for {Path(args.embeddings).name} ({embeddings.shape[1]}-D)", fontsize=16)
