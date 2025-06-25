@@ -120,7 +120,7 @@ def plot_2d_chart(ax, title, embeddings_2d, point_colors, plot_mask, label_str_t
         mask = (point_colors == label_int) & plot_mask
         if np.any(mask):
             legend_label = area_names.get(label_str, label_str)
-            scatter = ax.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], s=10, color=cmap(label_int), label=legend_label, alpha=0.8)
+            scatter = ax.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], s=10, color=cmap(label_int), label=legend_label, alpha=0.3)
             handles.append(scatter)
             labels.append(legend_label)
 
