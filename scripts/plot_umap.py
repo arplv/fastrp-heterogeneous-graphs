@@ -19,6 +19,8 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import normalize
 from adjustText import adjust_text
 
+from src.data_loader import load_author_mappings, load_dictionary, load_edge_list
+
 def load_area_names(path: Path) -> dict[str, str]:
     """Loads descriptive names for research areas."""
     area_map = {}
@@ -99,7 +101,7 @@ def load_names(names_path: Path) -> dict[int, str]:
         exit(1)
     return id_to_name
 
-def plot_2d_chart(ax, title, embeddings_2d, point_colors, plot_mask, label_str_to_int, area_names, id_to_name, annotate_ids, type_colors=None):
+def plot_2d_chart(ax, title, embeddings_2d, point_colors, plot_mask, global_id_to_name, annotate_ids, type_colors=None):
     """Helper to draw a 2D scatter plot on a given axes."""
     ax.set_title(title, fontsize=12)
     ax.set_xlabel("Dimension 1")
@@ -111,7 +113,7 @@ def plot_2d_chart(ax, title, embeddings_2d, point_colors, plot_mask, label_str_t
 
     # Plot unlabeled points
     unlabeled_mask = (point_colors == -1) & plot_mask
-    ax.scatter(embeddings_2d[unlabeled_mask, 0], embeddings_2d[unlabeled_mask, 1], s=5, color='lightgray', alpha=0.6)
+    ax.scatter(embeddings_2d[unlabeled_mask, 0], embeddings_2d[unlabeled_mask, 1], s=5, color='lightgray', alpha=0.3)
 
     # Plot labeled points
     handles, labels = [], []
@@ -121,7 +123,7 @@ def plot_2d_chart(ax, title, embeddings_2d, point_colors, plot_mask, label_str_t
         mask = (point_colors == label_int) & plot_mask
         if np.any(mask):
             legend_label = area_names.get(label_str, label_str)
-            scatter = ax.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], s=10, color=cmap(label_int), label=legend_label, alpha=0.8)
+            scatter = ax.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], s=10, color=cmap(label_int), label=legend_label, alpha=0.3)
             handles.append(scatter)
             labels.append(legend_label)
 
@@ -129,15 +131,13 @@ def plot_2d_chart(ax, title, embeddings_2d, point_colors, plot_mask, label_str_t
     if annotate_ids:
         texts = []
         num_embeddings = embeddings_2d.shape[0]
-        for raw_author_id in annotate_ids:
-            author_id = raw_author_id - 1
-            if 0 <= author_id < num_embeddings and plot_mask[author_id]:
-                label = id_to_name.get(author_id, f"ID: {raw_author_id}")
-                texts.append(ax.text(embeddings_2d[author_id, 0], embeddings_2d[author_id, 1], label,
+        for node_id in annotate_ids:
+            # Check if node is within bounds and not filtered out
+            if 0 <= node_id < num_embeddings and plot_mask[node_id]:
+                label = global_id_to_name.get(node_id, f"ID: {node_id}")
+                texts.append(ax.text(embeddings_2d[node_id, 0], embeddings_2d[node_id, 1], label,
                                      fontsize=9, ha='center',
                                      bbox=dict(facecolor='white', alpha=0.5, boxstyle='round,pad=0.1')))
-            else:
-                print(f"Warning: Annotation ID {raw_author_id} is out of bounds or filtered. Skipping.")
         
         if texts:
             adjust_text(texts, ax=ax, arrowprops=dict(arrowstyle='->', color='black', lw=0.5))
@@ -186,6 +186,14 @@ def main(args):
             return
         print(f"Filtering visualization for types: {list(embeddings_by_type.keys())}")
 
+    # Load all dictionaries for names
+    author_id_to_name, _ = load_author_mappings(args.data_dir)
+    conf_name_to_id = load_dictionary(args.data_dir / 'conf_dict.txt')
+    term_name_to_id = load_dictionary(args.data_dir / 'term_dict.txt')
+    conf_id_to_name = {v: k for k, v in conf_name_to_id.items()}
+    term_id_to_name = {v: k for k, v in term_name_to_id.items()}
+    id_to_name_map = {'A': author_id_to_name, 'C': conf_id_to_name, 'T': term_id_to_name}
+
     # Combine embeddings and create type-based color mapping
     all_embeddings = []
     point_type_colors = []
@@ -208,6 +216,21 @@ def main(args):
     # L2 normalize embeddings for cosine distance
     embeddings_norm = normalize(embeddings, norm='l2', axis=1)
 
+    # Create a mask to filter authors based on the minimum number of co-authorships
+    plot_mask = np.ones(embeddings.shape[0], dtype=bool)
+    if args.min_coauthors > 0 and 'A' in node_offsets:
+        print(f"Applying filter for authors with at least {args.min_coauthors} co-authorships.")
+        author_offset = node_offsets['A']
+        n_authors = len(embeddings_by_type['A'])
+        
+        coauthorship_path = args.data_dir / 'AA.txt'
+        adj_matrix = load_edge_list(coauthorship_path, n_authors, n_authors)
+        if adj_matrix is not None:
+            degrees = np.array(adj_matrix.sum(axis=1)).flatten()
+            author_mask = degrees >= args.min_coauthors
+            plot_mask[author_offset : author_offset + n_authors] = author_mask
+            print(f"  {author_mask.sum()} of {n_authors} authors will be shown.")
+
     # --- 3. UMAP & PCA Projections ---
     print("Performing UMAP projection...")
     umap_params = {'n_neighbors': 15, 'min_dist': 0.5, 'metric': "euclidean"}
@@ -227,7 +250,30 @@ def main(args):
     print(f"PCA projection took {end_time - start_time:.2f} seconds.")
     print(f"PCA Explained Variance: PC1={explained_variance[0]:.2%}, PC2={explained_variance[1]:.2%}, PC3={explained_variance[2]:.2%}, Total={explained_variance.sum():.2%}")
 
-    # --- 4. Visualization ---
+    # --- 4. Annotations & Visualization ---
+    # Create a global mapping from ID to name for annotations
+    global_id_to_name = {}
+    for node_type, id_map in id_to_name_map.items():
+        if node_type in node_offsets:
+            offset = node_offsets[node_type]
+            for local_id, name in id_map.items():
+                global_id_to_name[local_id + offset] = name
+
+    # Randomly select nodes to annotate from each type
+    annotation_ids = []
+    for node_type in embeddings_by_type.keys():
+        offset = node_offsets[node_type]
+        count = len(embeddings_by_type[node_type])
+        num_to_sample = min(10, count)
+        if num_to_sample > 0:
+            # Get indices of nodes that are not filtered out
+            possible_indices = np.where(plot_mask[offset:offset+count])[0]
+            if len(possible_indices) > 0:
+                num_to_sample = min(num_to_sample, len(possible_indices))
+                random_local_ids = np.random.choice(possible_indices, size=num_to_sample, replace=False)
+                annotation_ids.extend(list(random_local_ids + offset))
+    print(f"Randomly selected {len(annotation_ids)} nodes to annotate.")
+
     print("Generating plot...")
     fig, axes = plt.subplots(2, 2, figsize=(22, 18))
 
@@ -251,9 +297,22 @@ def main(args):
             mask = np.zeros(num_embeddings, dtype=bool)
             mask[offset:offset+count] = True
             
-            ax1.scatter(embeddings_umap[mask, 0], embeddings_umap[mask, 1], s=10, color=color, label=f"Type: {node_type}", alpha=0.7)
+            # Combine with the plot_mask to respect filtering
+            final_mask = mask & plot_mask
+
+            ax1.scatter(embeddings_umap[final_mask, 0], embeddings_umap[final_mask, 1], s=10, color=color, label=f"Type: {node_type}", alpha=0.3)
             handles.append(plt.Line2D([0], [0], marker='o', color='w', label=f"Type: {node_type}",
                                       markerfacecolor=color, markersize=10))
+
+    # Add annotations to UMAP plot
+    texts = []
+    for node_id in annotation_ids:
+        label = global_id_to_name.get(node_id, f"ID: {node_id}")
+        texts.append(ax1.text(embeddings_umap[node_id, 0], embeddings_umap[node_id, 1], label,
+                                fontsize=9, ha='center',
+                                bbox=dict(facecolor='white', alpha=0.5, boxstyle='round,pad=0.1')))
+    if texts:
+        adjust_text(texts, ax=ax1, arrowprops=dict(arrowstyle='->', color='black', lw=0.5))
 
     ax1.set_xlabel("UMAP Dimension 1")
     ax1.set_ylabel("UMAP Dimension 2")
@@ -262,7 +321,7 @@ def main(args):
     ax2 = axes[0, 1]
     ax2.set_title("PCA Projection", fontsize=12)
     ax2.grid(True, linestyle='--', alpha=0.6)
-    ax2.scatter(embeddings_pca[:, 0], embeddings_pca[:, 1], c=point_colors, s=10, alpha=0.7)
+    ax2.scatter(embeddings_pca[plot_mask, 0], embeddings_pca[plot_mask, 1], c=point_colors[plot_mask], s=10, alpha=0.3)
     ax2.set_xlabel(f"PC 1 ({explained_variance[0]:.2%})")
     ax2.set_ylabel(f"PC 2 ({explained_variance[1]:.2%})")
 
@@ -270,7 +329,7 @@ def main(args):
     ax3 = axes[1, 0]
     ax3.set_title("PCA Projection", fontsize=12)
     ax3.grid(True, linestyle='--', alpha=0.6)
-    ax3.scatter(embeddings_pca[:, 1], embeddings_pca[:, 2], c=point_colors, s=10, alpha=0.7)
+    ax3.scatter(embeddings_pca[plot_mask, 1], embeddings_pca[plot_mask, 2], c=point_colors[plot_mask], s=10, alpha=0.3)
     ax3.set_xlabel(f"PC 2 ({explained_variance[1]:.2%})")
     ax3.set_ylabel(f"PC 3 ({explained_variance[2]:.2%})")
 
@@ -278,7 +337,7 @@ def main(args):
     ax4 = axes[1, 1]
     ax4.set_title("PCA Projection", fontsize=12)
     ax4.grid(True, linestyle='--', alpha=0.6)
-    ax4.scatter(embeddings_pca[:, 0], embeddings_pca[:, 2], c=point_colors, s=10, alpha=0.7)
+    ax4.scatter(embeddings_pca[plot_mask, 0], embeddings_pca[plot_mask, 2], c=point_colors[plot_mask], s=10, alpha=0.3)
     ax4.set_xlabel(f"PC 1 ({explained_variance[0]:.2%})")
     ax4.set_ylabel(f"PC 3 ({explained_variance[2]:.2%})")
 
@@ -315,8 +374,6 @@ if __name__ == '__main__':
                         help="Directory containing the co-authorship file (AA.txt).")
     parser.add_argument('--min-coauthors', type=int, default=0,
                         help="Minimum number of co-authorships required for an author to be visualized. Set to 0 to disable.")
-    parser.add_argument('--annotate', type=lambda s: [int(item) for item in s.split(',')],
-                        help="Optional comma-separated list of 1-based author IDs to annotate in the plot.")
     parser.add_argument('--output', type=Path, default='plots/umap_visualization.png',
                         help="Path to save the output plot.")
     parser.add_argument('--plot-types', type=str, nargs='+', default=['A', 'C', 'T'],

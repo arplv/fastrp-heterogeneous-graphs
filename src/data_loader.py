@@ -136,7 +136,11 @@ def load_data(data_dir: Union[str, Path] = 'data'):
 
     # Add identity to author-author matrix
     if "A" in relations and "A" in relations["A"]:
-        relations["A"]["A"] = (relations["A"]["A"] + sp.eye(n_authors)).tocsr()
+        # Ensure the matrix is symmetric before adding self-loops
+        aa_matrix = (relations["A"]["A"] + relations["A"]["A"].T).tocsr()
+        # Binarize to handle cases where (i,j) and (j,i) both exist.
+        aa_matrix.data = np.ones_like(aa_matrix.data)
+        relations["A"]["A"] = (aa_matrix + sp.eye(n_authors)).tocsr()
     else:
         if "A" not in relations: relations["A"] = {}
         relations["A"]["A"] = sp.eye(n_authors).tocsr()
