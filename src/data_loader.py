@@ -50,8 +50,47 @@ def load_author_mappings(data_dir: Union[str, Path]):
                 continue
     return id_to_name, name_to_id
 
+def _stitch_relations(relations, n_authors, n_confs, n_terms):
+    """
+    Stitches individual relation matrices into a single global adjacency matrix
+    for the heterogeneous graph. Node IDs are ordered [Authors, Conferences, Terms].
+    """
+    n_total = n_authors + n_confs + n_terms
+    node_offsets = {
+        'A': 0,
+        'C': n_authors,
+        'T': n_authors + n_confs
+    }
+
+    # Initialize a dictionary to hold the stitched matrices for each relation type
+    stitched_relations = {}
+
+    for src_type, dst_map in relations.items():
+        for dst_type, matrix in dst_map.items():
+            
+            # Create a new empty matrix with the total graph size
+            stitched_matrix = sp.lil_matrix((n_total, n_total), dtype=matrix.dtype)
+            
+            # Get the ID offsets for the source and destination types
+            src_offset = node_offsets[src_type]
+            dst_offset = node_offsets[dst_type]
+            
+            # Place the original matrix into the correct block of the large matrix
+            rows, cols = matrix.nonzero()
+            stitched_matrix[rows + src_offset, cols + dst_offset] = matrix[rows, cols]
+            
+            # Store the stitched matrix, converting to CSR for efficiency
+            if src_type not in stitched_relations:
+                stitched_relations[src_type] = {}
+            stitched_relations[src_type][dst_type] = stitched_matrix.tocsr()
+
+    return stitched_relations, node_offsets
+
 def load_data(data_dir: Union[str, Path] = 'data'):
-    """Loads the entire bibliographic dataset."""
+    """
+    Loads the entire bibliographic dataset and prepares it for joint embedding.
+    Returns the original relations, the stitched global relations, node counts, and ID offsets.
+    """
     data_dir = Path(data_dir)
     print("Loading data...")
 
@@ -102,5 +141,10 @@ def load_data(data_dir: Union[str, Path] = 'data'):
         if "A" not in relations: relations["A"] = {}
         relations["A"]["A"] = sp.eye(n_authors).tocsr()
 
+    print("Stitching relations into a global graph...")
+    stitched_relations, node_offsets = _stitch_relations(relations, n_authors, n_confs, n_terms)
     print("Data loading complete.")
-    return relations, n_authors, n_confs, n_terms 
+
+    node_counts = {'A': n_authors, 'C': n_confs, 'T': n_terms}
+
+    return relations, stitched_relations, node_counts, node_offsets 

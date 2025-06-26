@@ -43,7 +43,7 @@ def scipy_to_torch_sparse(matrix: sp.csr_matrix, device: torch.device) -> torch.
     return torch.sparse_coo_tensor(i, v, torch.Size(shape), device=device)
 
 class FastRPModel(nn.Module):
-    def __init__(self, n_authors: int, dim: int, meta_paths: List[str], relations: Dict[str, Dict[str, sp.csr_matrix]], num_powers: int, alpha: float, beta: float, s: int, device: str = 'cpu'):
+    def __init__(self, n_total: int, dim: int, meta_paths: List[str], relations: Dict[str, Dict[str, sp.csr_matrix]], num_powers: int, alpha: float, beta: float, s: int, device: str = 'cpu'):
         super().__init__()
         self.device = torch.device(device)
         self.dim = dim
@@ -51,10 +51,17 @@ class FastRPModel(nn.Module):
         self.intercept = nn.Parameter(torch.tensor(0.0))
         self.slope = nn.Parameter(torch.tensor(1.0))
         
-        # --- Feature Generation (Efficient Pre-computation) ---
-        # Create the initial random projection matrix.
+        # --- Feature Generation (Efficient Pre-computation on Global Graph) ---
+        # Create a global adjacency matrix for degree calculation by summing all relations
+        global_adj = sum(
+            matrix for dst_map in relations.values() for matrix in dst_map.values()
+        ).tocsr()
+        global_adj = (global_adj + global_adj.T).tocsr() # Ensure symmetry
+        degrees = global_adj.sum(axis=1).A.flatten()
+
+        # Create the initial random projection matrix for the entire graph.
         R_prime = self._create_random_projection_matrix(
-            n_authors, dim, alpha, relations['A']['A'].sum(axis=1).A.flatten(), s=s
+            n_total, dim, alpha, degrees, s=s
         )
 
         features_list = []
@@ -67,15 +74,10 @@ class FastRPModel(nn.Module):
             path_parts = list(path_str)
             hop_matrices = []
             for i in range(len(path_parts) - 1):
-                matrix = self._hop(relations[path_parts[i]][path_parts[i+1]].copy(), beta)
+                src_type, dst_type = path_parts[i], path_parts[i+1]
+                matrix = self._hop(relations[src_type][dst_type].copy(), beta)
                 hop_matrices.append(matrix)
 
-            # Efficiently compute features for each power of the meta-path matrix M.
-            # We compute U_i = M^i @ R' by iteratively applying M.
-            # U_i = M @ U_{i-1}, where U_0 = R'.
-            # The multiplication M @ U is done efficiently as (M_1 @ ... @ M_k) @ U,
-            # applying matrices from right-to-left to avoid forming the large (N,N) M matrix.
-            
             # U_prev_sparse stores the sparse result of the previous power, starting with R'.
             U_prev_sparse = R_prime
             
@@ -85,9 +87,6 @@ class FastRPModel(nn.Module):
                 for hop_matrix in reversed(hop_matrices):
                     U_curr_sparse = hop_matrix @ U_curr_sparse
                 
-                # Convert the sparse result to a dense, normalized tensor for the model.
-                # The .toarray() call is memory-intensive but necessary here. The key efficiency
-                # gain is avoiding the (N, N) matrix construction and multiplication.
                 U_tensor = torch.from_numpy(U_curr_sparse.toarray()).float()
                 U_tensor = F.normalize(U_tensor, p=2, dim=1)
                 features_list.append(U_tensor)
@@ -95,7 +94,7 @@ class FastRPModel(nn.Module):
                 # The next iteration will build upon the sparse result of this one.
                 U_prev_sparse = U_curr_sparse
         
-        # Shape: (F, N, D) where F = num_paths * num_powers
+        # Shape: (F, N_total, D) where F = num_paths * num_powers
         self.features = torch.stack(features_list, dim=0).to(self.device)
 
     def _create_random_projection_matrix(self, n_nodes, dim, alpha, degrees, s):
@@ -136,7 +135,7 @@ class FastRPModel(nn.Module):
         return torch.einsum('f,fnd->nd', w, self.features)
 
     def forward(self, idx_i: torch.Tensor, idx_j: torch.Tensor) -> torch.Tensor:
-        E = self._mixed_embedding() # (N, D) - differentiable!
+        E = self._mixed_embedding() # (N_total, D) - differentiable!
         zi = E[idx_i]
         zj = E[idx_j]
         

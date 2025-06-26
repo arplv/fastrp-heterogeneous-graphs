@@ -77,6 +77,27 @@ def plot_metrics(metrics_history, output_path):
     plt.savefig(output_path)
     print(f"Metrics plot saved to {output_path}")
 
+def _get_edges_from_targets(targets, relations, node_offsets, device):
+    """Gets positive edge indices for given training targets, mapped to the global ID space."""
+    pos_edge_indices = []
+    for target in targets:
+        src_type, dst_type = target.split('-')
+        if src_type not in relations or dst_type not in relations[src_type]:
+            raise ValueError(f"Target '{target}' not found in relations.")
+        
+        matrix = relations[src_type][dst_type]
+        src_offset = node_offsets[src_type]
+        dst_offset = node_offsets[dst_type]
+
+        # Get edges and map to global IDs
+        rows, cols = sp.triu(matrix, k=1).nonzero()
+        src_ids = torch.from_numpy(rows + src_offset).long()
+        dst_ids = torch.from_numpy(cols + dst_offset).long()
+        
+        pos_edge_indices.append(torch.stack([src_ids, dst_ids], dim=0))
+
+    return torch.cat(pos_edge_indices, dim=1).to(device)
+
 def main(args):
     # Setup
     if args.device == 'auto':
@@ -96,14 +117,15 @@ def main(args):
     print(f"Using cache directory: {cache_dir.resolve()}")
 
     print("Loading data...")
-    relations, n_authors, _, _ = load_data(args.data_dir)
+    relations, stitched_relations, node_counts, node_offsets = load_data(args.data_dir)
+    n_total = sum(node_counts.values())
     print("Data loading complete.")
 
     model = FastRPModel(
-        n_authors=n_authors,
+        n_total=n_total,
         dim=args.dim,
         meta_paths=args.meta_paths,
-        relations=relations,
+        relations=stitched_relations,
         num_powers=args.num_powers,
         alpha=args.alpha,
         beta=args.beta,
@@ -111,25 +133,29 @@ def main(args):
         device=model_device
     ).to(model_device)
 
-    # Prepare training data: positive edges
+    # --- Prepare training data ---
     if args.edge_split:
-        print(f"Loading edge split from {args.edge_split}")
+        print(f"Loading edge split from {args.edge_split} for target '{args.training_targets[0]}'")
+        if len(args.training_targets) > 1:
+            print("Warning: Edge split is used, but multiple training targets are specified. Only the first target will be trained.")
+        
         split_data = torch.load(args.edge_split)
-        train_pos_edge_index = split_data['train_pos_edge_index'].to(model_device)
-        val_pos_edge_index = split_data['val_pos_edge_index'].to(model_device)
-        print(f"  Train positive edges: {train_pos_edge_index.size(1)}")
-        print(f"  Validation positive edges: {val_pos_edge_index.size(1)}")
+        src_type, dst_type = args.training_targets[0].split('-')
+        train_pos_edge_index = split_data['train_pos_edge_index'] + node_offsets[src_type] # Assuming homogenous split
+        val_pos_edge_index = split_data['val_pos_edge_index'] + node_offsets[src_type] # Needs more robust logic for heterogeneous splits
     else:
-        print("No edge split provided. Using all positive edges for training and validation.")
-        train_adj = relations['A']['A']
-        train_adj.setdiag(0)
-        train_adj.eliminate_zeros()
-        all_pos_edges = torch.from_numpy(np.array(sp.triu(train_adj, k=1).nonzero())).long()
+        print(f"Using specified training targets: {args.training_targets}")
+        all_pos_edges = _get_edges_from_targets(args.training_targets, relations, node_offsets, model_device)
+        
         # Simple split for fallback
         perm = torch.randperm(all_pos_edges.size(1))
         val_size = int(all_pos_edges.size(1) * 0.1)
         train_pos_edge_index = all_pos_edges[:, perm[val_size:]].to(model_device)
         val_pos_edge_index = all_pos_edges[:, perm[:val_size]].to(model_device)
+
+    print(f"  Total positive edges: {all_pos_edges.size(1)}")
+    print(f"  Train positive edges: {train_pos_edge_index.size(1)}")
+    print(f"  Validation positive edges: {val_pos_edge_index.size(1)}")
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     scheduler = ReduceLROnPlateau(optimizer, 'max', factor=0.5, patience=10)
@@ -173,7 +199,7 @@ def main(args):
             
             neg_batch = negative_sampling(
                 edge_index=train_pos_edge_index, # Sample negatives from the whole graph
-                num_nodes=n_authors,
+                num_nodes=n_total,
                 num_neg_samples=pos_batch.size(1) * args.neg_samples
             )
 
@@ -229,7 +255,7 @@ def main(args):
                 pos_batch = val_pos_edge_index[:, i:i+args.batch_size]
                 neg_batch = negative_sampling(
                     edge_index=train_pos_edge_index, # IMPORTANT: still sample negatives from the whole graph space
-                    num_nodes=n_authors,
+                    num_nodes=n_total,
                     num_neg_samples=pos_batch.size(1) * args.neg_samples
                 )
                 idx_i = torch.cat([pos_batch[0], neg_batch[0]])
@@ -288,7 +314,14 @@ def main(args):
     if args.output:
         print(f"Computing and saving final embeddings to {args.output}...")
         final_embeddings = model._mixed_embedding().detach().cpu()
-        torch.save(final_embeddings, args.output)
+        
+        # Split embeddings by type
+        embeddings_by_type = {}
+        for node_type, offset in node_offsets.items():
+            count = node_counts[node_type]
+            embeddings_by_type[node_type] = final_embeddings[offset : offset + count]
+
+        torch.save(embeddings_by_type, args.output)
         print("Embeddings saved.")
 
     if args.save_model_path:
@@ -305,6 +338,8 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="FastRP for Heterogeneous Graphs")
     parser.add_argument('--data-dir', type=str, default='data', help='Directory containing the dataset')
+    parser.add_argument('--training-targets', type=str, nargs='+', default=['A-A', 'A-C', 'A-T'],
+                        help="List of link types to train on (e.g., 'A-A', 'C-T').")
     parser.add_argument('--meta-paths', type=str, nargs='+', default=['AAA', 'ACA', 'ATA'], help='List of meta-paths to use. Element-wise products are not supported.')
     parser.add_argument('--dim', type=int, default=256, help='Embedding dimension.')
     parser.add_argument('--s', type=int, default=3, help='Sparsity for random projection matrix (s non-zero entries per column).')
@@ -317,7 +352,7 @@ if __name__ == '__main__':
     parser.add_argument('--neg-samples', type=int, default=3, help='Number of negative samples per positive sample.')
     parser.add_argument('--batch-size', type=int, default=4096, help='Training batch size')
     parser.add_argument('--device', type=str, default='auto', help='Device to use for training (e.g., "cpu", "cuda", "mps").')
-    parser.add_argument('--output', type=str, default='author_embeddings.pt', help='Path to save final embeddings')
+    parser.add_argument('--output', type=str, default='joint_embeddings.pt', help='Path to save final embeddings')
     parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility.')
     parser.add_argument('--cache-dir', type=str, default='./matrix_cache', help='Directory to cache computed meta-path matrices.')
     parser.add_argument('--save-model-path', type=str, default='fastrp_model.pth', help='Path to save the trained model checkpoint.')
