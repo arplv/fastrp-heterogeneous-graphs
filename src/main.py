@@ -133,27 +133,75 @@ def main(args):
         device=model_device
     ).to(model_device)
 
-    # --- Prepare training data ---
+    # --- Prepare training data with balancing ---
     if args.edge_split:
-        print(f"Loading edge split from {args.edge_split} for target '{args.training_targets[0]}'")
+        # This part remains for users who provide their own splits, but we add a warning.
+        print(f"Warning: Using a pre-computed edge split from {args.edge_split}.")
+        print("         The balanced sampling strategy will be skipped.")
         if len(args.training_targets) > 1:
-            print("Warning: Edge split is used, but multiple training targets are specified. Only the first target will be trained.")
+            print("Warning: Edge split is used, but multiple training targets are specified. Behavior may be unexpected.")
         
         split_data = torch.load(args.edge_split)
-        src_type, dst_type = args.training_targets[0].split('-')
-        train_pos_edge_index = split_data['train_pos_edge_index'] + node_offsets[src_type] # Assuming homogenous split
-        val_pos_edge_index = split_data['val_pos_edge_index'] + node_offsets[src_type] # Needs more robust logic for heterogeneous splits
+        # This assumes the split was created for a single relation type and needs manual offset adjustment.
+        # It's a legacy path and less robust than the new balancing approach.
+        src_type, _ = args.training_targets[0].split('-')
+        train_pos_edge_index = split_data['train_pos_edge_index'] + node_offsets[src_type]
+        val_pos_edge_index = split_data['val_pos_edge_index'] + node_offsets[src_type]
+        all_pos_edges_count = train_pos_edge_index.size(1) + val_pos_edge_index.size(1)
     else:
-        print(f"Using specified training targets: {args.training_targets}")
-        all_pos_edges = _get_edges_from_targets(args.training_targets, relations, node_offsets, model_device)
-        
-        # Simple split for fallback
-        perm = torch.randperm(all_pos_edges.size(1))
-        val_size = int(all_pos_edges.size(1) * 0.1)
-        train_pos_edge_index = all_pos_edges[:, perm[val_size:]].to(model_device)
-        val_pos_edge_index = all_pos_edges[:, perm[:val_size]].to(model_device)
+        print(f"Balancing training data for targets: {args.training_targets}")
+        edges_by_target = {}
+        for target in args.training_targets:
+            src_type, dst_type = target.split('-')
+            is_symmetric = src_type == dst_type
+            
+            # Check for both A-C and C-A etc.
+            if src_type in relations and dst_type in relations[src_type]:
+                matrix = relations[src_type][dst_type]
+            elif dst_type in relations and src_type in relations[dst_type]:
+                matrix = relations[dst_type][src_type]
+            else:
+                print(f"Warning: Target '{target}' not found in relations. Skipping.")
+                continue
+            
+            src_offset = node_offsets[src_type]
+            dst_offset = node_offsets[dst_type]
 
-    print(f"  Total positive edges: {all_pos_edges.size(1)}")
+            if is_symmetric:
+                # For symmetric relations (A-A), take upper triangle to avoid duplicates
+                rows, cols = sp.triu(matrix, k=1).nonzero()
+            else:
+                # For bipartite relations, take all edges
+                rows, cols = matrix.nonzero()
+                
+            src_ids = torch.from_numpy(rows + src_offset).long()
+            dst_ids = torch.from_numpy(cols + dst_offset).long()
+            
+            edges_by_target[target] = torch.stack([src_ids, dst_ids], dim=0)
+
+        if not edges_by_target:
+            raise ValueError("No valid training targets found. Aborting.")
+
+        # Balance by undersampling to the size of the smallest relation
+        min_edges = min(e.size(1) for e in edges_by_target.values())
+        print(f"Balancing all relations to {min_edges} edges each by undersampling.")
+
+        balanced_edges = []
+        for target, edges in edges_by_target.items():
+            perm = torch.randperm(edges.size(1))
+            balanced_edges.append(edges[:, perm[:min_edges]])
+            print(f"  - Sampled {min_edges} edges for '{target}' (from {edges.size(1)})")
+
+        all_pos_edges = torch.cat(balanced_edges, dim=1).to(model_device)
+        all_pos_edges_count = all_pos_edges.size(1)
+
+        # Simple random split of the now-balanced set of edges
+        perm = torch.randperm(all_pos_edges.size(1))
+        val_size = int(all_pos_edges.size(1) * 0.1) # 10% for validation
+        train_pos_edge_index = all_pos_edges[:, perm[val_size:]]
+        val_pos_edge_index = all_pos_edges[:, perm[:val_size]]
+
+    print(f"  Total positive edges after balancing: {all_pos_edges_count}")
     print(f"  Train positive edges: {train_pos_edge_index.size(1)}")
     print(f"  Validation positive edges: {val_pos_edge_index.size(1)}")
 
@@ -338,8 +386,8 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="FastRP for Heterogeneous Graphs")
     parser.add_argument('--data-dir', type=str, default='data', help='Directory containing the dataset')
-    parser.add_argument('--training-targets', type=str, nargs='+', default=['A-A', 'A-C', 'A-T'],
-                        help="List of link types to train on (e.g., 'A-A', 'C-T').")
+    parser.add_argument('--training-targets', type=str, nargs='+', default=['A-A', 'A-C', 'A-T', 'C-T'],
+                        help="List of link types to train on (e.g., 'A-A', 'C-T'). Data will be balanced across these types.")
     parser.add_argument('--meta-paths', type=str, nargs='+', default=['AAA', 'ACA', 'ATA'], help='List of meta-paths to use. Element-wise products are not supported.')
     parser.add_argument('--dim', type=int, default=256, help='Embedding dimension.')
     parser.add_argument('--s', type=int, default=3, help='Sparsity for random projection matrix (s non-zero entries per column).')
