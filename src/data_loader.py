@@ -134,16 +134,24 @@ def load_data(data_dir: Union[str, Path] = 'data'):
         if "T" not in relations: relations["T"] = {}
         relations["T"]["C"] = relations["C"]["T"].T.tocsr()
 
-    # Add identity to author-author matrix
+    # --- Add self-loops to all node types to ensure equal treatment ---
+    # Author self-loops
     if "A" in relations and "A" in relations["A"]:
-        # Ensure the matrix is symmetric before adding self-loops
+        # Symmetrize and binarize existing co-authorship matrix before adding self-loops
         aa_matrix = (relations["A"]["A"] + relations["A"]["A"].T).tocsr()
-        # Binarize to handle cases where (i,j) and (j,i) both exist.
         aa_matrix.data = np.ones_like(aa_matrix.data)
-        relations["A"]["A"] = (aa_matrix + sp.eye(n_authors)).tocsr()
+        relations["A"]["A"] = (aa_matrix + sp.eye(n_authors, dtype=np.float32)).tocsr()
     else:
         if "A" not in relations: relations["A"] = {}
-        relations["A"]["A"] = sp.eye(n_authors).tocsr()
+        relations["A"]["A"] = sp.eye(n_authors, dtype=np.float32).tocsr()
+
+    # Conference self-loops
+    if "C" not in relations: relations["C"] = {}
+    relations["C"]["C"] = sp.eye(n_confs, dtype=np.float32).tocsr()
+
+    # Term self-loops
+    if "T" not in relations: relations["T"] = {}
+    relations["T"]["T"] = sp.eye(n_terms, dtype=np.float32).tocsr()
 
     print("Stitching relations into a global graph...")
     stitched_relations, node_offsets = _stitch_relations(relations, n_authors, n_confs, n_terms)

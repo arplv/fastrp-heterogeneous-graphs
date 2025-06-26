@@ -416,7 +416,8 @@ if __name__ == '__main__':
     parser.add_argument('--data-dir', type=str, default='data', help='Directory containing the dataset')
     parser.add_argument('--training-targets', type=str, nargs='+', default=['A-A', 'A-C', 'A-T', 'C-T'],
                         help="List of link types to train on (e.g., 'A-A', 'C-T'). Data will be balanced across these types.")
-    parser.add_argument('--meta-paths', type=str, nargs='+', default=['AAA', 'ACA', 'ATA', 'CAC', 'CTC', 'TAT', 'TCT'], 
+    parser.add_argument('--meta-paths', type=str, nargs='+', 
+                        default=['AAA', 'ACA', 'ATA', 'CCC', 'CAC', 'CTC', 'TTT', 'TAT', 'TCT'], 
                         help='List of meta-paths to use. Default is a comprehensive set for all node types.')
     parser.add_argument('--dim', type=int, default=256, help='Embedding dimension.')
     parser.add_argument('--s', type=int, default=3, help='Sparsity for random projection matrix (s non-zero entries per column).')
