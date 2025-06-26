@@ -141,5 +141,7 @@ class FastRPModel(nn.Module):
         
         dist_sq = ((zi - zj) ** 2).sum(dim=1)
         
-        logits = self.intercept - self.slope * dist_sq
+        # Enforce non-negative slope for stability. A negative slope is physically meaningless.
+        slope = F.relu(self.slope)
+        logits = self.intercept - slope * dist_sq
         return logits 
