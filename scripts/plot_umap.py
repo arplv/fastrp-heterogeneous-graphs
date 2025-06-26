@@ -101,71 +101,6 @@ def load_names(names_path: Path) -> dict[int, str]:
         exit(1)
     return id_to_name
 
-def plot_2d_chart(ax, title, embeddings_2d, point_colors, plot_mask, global_id_to_name, annotate_ids, type_colors=None):
-    """Helper to draw a 2D scatter plot on a given axes."""
-    ax.set_title(title, fontsize=12)
-    ax.set_xlabel("Dimension 1")
-    ax.set_ylabel("Dimension 2")
-    ax.grid(True, linestyle='--', alpha=0.6)
-
-    # Use specified type_colors if provided (for UMAP), else a default cmap (for PCA)
-    cmap = type_colors if type_colors else plt.get_cmap('tab20', len(label_str_to_int))
-
-    # Plot unlabeled points
-    unlabeled_mask = (point_colors == -1) & plot_mask
-    ax.scatter(embeddings_2d[unlabeled_mask, 0], embeddings_2d[unlabeled_mask, 1], s=5, color='lightgray', alpha=0.3)
-
-    # Plot labeled points
-    handles, labels = [], []
-    sorted_labels = sorted(label_str_to_int.items(), key=lambda item: area_names.get(item[0], item[0]))
-
-    for label_str, label_int in sorted_labels:
-        mask = (point_colors == label_int) & plot_mask
-        if np.any(mask):
-            legend_label = area_names.get(label_str, label_str)
-            scatter = ax.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], s=10, color=cmap(label_int), label=legend_label, alpha=0.3)
-            handles.append(scatter)
-            labels.append(legend_label)
-
-    # Annotations
-    if annotate_ids:
-        texts = []
-        num_embeddings = embeddings_2d.shape[0]
-        for node_id in annotate_ids:
-            # Check if node is within bounds and not filtered out
-            if 0 <= node_id < num_embeddings and plot_mask[node_id]:
-                label = global_id_to_name.get(node_id, f"ID: {node_id}")
-                texts.append(ax.text(embeddings_2d[node_id, 0], embeddings_2d[node_id, 1], label,
-                                     fontsize=9, ha='center',
-                                     bbox=dict(facecolor='white', alpha=0.5, boxstyle='round,pad=0.1')))
-        
-        if texts:
-            adjust_text(texts, ax=ax, arrowprops=dict(arrowstyle='->', color='black', lw=0.5))
-    
-    return handles, labels
-
-def plot_3d_chart(ax, title, embeddings_3d, point_colors, plot_mask, label_str_to_int, area_names):
-    """Helper to draw a 3D scatter plot on a given axes."""
-    ax.set_title(title, fontsize=12)
-
-    cmap = plt.get_cmap('tab20', len(label_str_to_int))
-
-    # Plot unlabeled points
-    unlabeled_mask = (point_colors == -1) & plot_mask
-    ax.scatter(embeddings_3d[unlabeled_mask, 0], embeddings_3d[unlabeled_mask, 1], embeddings_3d[unlabeled_mask, 2],
-               s=5, color='lightgray', alpha=0.4)
-
-    # Plot labeled points
-    sorted_labels = sorted(label_str_to_int.items(), key=lambda item: area_names.get(item[0], item[0]))
-    for label_str, label_int in sorted_labels:
-        mask = (point_colors == label_int) & plot_mask
-        if np.any(mask):
-            legend_label = area_names.get(label_str, label_str)
-            ax.scatter(embeddings_3d[mask, 0], embeddings_3d[mask, 1], embeddings_3d[mask, 2],
-                       s=10, color=cmap(label_int), label=legend_label, alpha=0.8)
-    
-    # Annotations are omitted in 3D for clarity
-
 def main(args):
     """Main function to orchestrate loading, projecting, and plotting."""
     # --- 1. Load Data ---
@@ -266,7 +201,7 @@ def main(args):
         count = len(embeddings_by_type[node_type])
         num_to_sample = min(10, count)
         if num_to_sample > 0:
-            # Get indices of nodes that are not filtered out
+            # Get indices of nodes that are not filtered out by the co-authorship mask
             possible_indices = np.where(plot_mask[offset:offset+count])[0]
             if len(possible_indices) > 0:
                 num_to_sample = min(num_to_sample, len(possible_indices))
@@ -276,16 +211,11 @@ def main(args):
 
     print("Generating plot...")
     fig, axes = plt.subplots(2, 2, figsize=(22, 18))
+    fig.suptitle(f'Joint Embedding Visualization ({", ".join(type_labels)})', fontsize=16)
 
-    # --- Set colors based on node type for all plots ---
-    # This overrides the author-label coloring for simplicity in the joint view.
-    # The original author labels are not used, we color by A, C, T.
-    num_embeddings = embeddings.shape[0]
-    point_colors = np.array(point_type_colors) # Use the type colors directly
-
-    # Plot UMAP (top-left)
+    # --- Plot UMAP (top-left) ---
     ax1 = axes[0, 0]
-    umap_title = f"UMAP Projection of {', '.join(type_labels)}"
+    umap_title = f"UMAP Projection"
     ax1.set_title(umap_title, fontsize=12)
     ax1.grid(True, linestyle='--', alpha=0.6)
     
@@ -294,30 +224,39 @@ def main(args):
         if node_type in embeddings_by_type:
             offset = node_offsets[node_type]
             count = len(embeddings_by_type[node_type])
-            mask = np.zeros(num_embeddings, dtype=bool)
-            mask[offset:offset+count] = True
+            type_mask = np.zeros(embeddings.shape[0], dtype=bool)
+            type_mask[offset:offset+count] = True
             
             # Combine with the plot_mask to respect filtering
-            final_mask = mask & plot_mask
+            final_mask = type_mask & plot_mask
 
             ax1.scatter(embeddings_umap[final_mask, 0], embeddings_umap[final_mask, 1], s=10, color=color, label=f"Type: {node_type}", alpha=0.3)
+            # Create a handle for the legend
             handles.append(plt.Line2D([0], [0], marker='o', color='w', label=f"Type: {node_type}",
                                       markerfacecolor=color, markersize=10))
 
     # Add annotations to UMAP plot
-    texts = []
-    for node_id in annotation_ids:
-        label = global_id_to_name.get(node_id, f"ID: {node_id}")
-        texts.append(ax1.text(embeddings_umap[node_id, 0], embeddings_umap[node_id, 1], label,
-                                fontsize=9, ha='center',
-                                bbox=dict(facecolor='white', alpha=0.5, boxstyle='round,pad=0.1')))
-    if texts:
-        adjust_text(texts, ax=ax1, arrowprops=dict(arrowstyle='->', color='black', lw=0.5))
+    if annotation_ids:
+        texts = []
+        for node_id in annotation_ids:
+            # Check if the node to be annotated wasn't filtered out
+            if plot_mask[node_id]:
+                label = global_id_to_name.get(node_id, f"ID: {node_id}")
+                texts.append(ax1.text(embeddings_umap[node_id, 0], embeddings_umap[node_id, 1], label,
+                                        fontsize=9, ha='center',
+                                        bbox=dict(facecolor='white', alpha=0.5, boxstyle='round,pad=0.1')))
+        if texts:
+            adjust_text(texts, ax=ax1, arrowprops=dict(arrowstyle='->', color='black', lw=0.5))
 
     ax1.set_xlabel("UMAP Dimension 1")
     ax1.set_ylabel("UMAP Dimension 2")
+    ax1.legend(handles=handles, title="Node Types")
 
-    # Plot PCA PC1 vs PC2 (top-right)
+    # This part needs the colors as an array for c argument
+    num_embeddings = embeddings.shape[0]
+    point_colors = np.array(point_type_colors)
+
+    # --- Plot PCA PC1 vs PC2 (top-right) ---
     ax2 = axes[0, 1]
     ax2.set_title("PCA Projection", fontsize=12)
     ax2.grid(True, linestyle='--', alpha=0.6)
@@ -325,7 +264,7 @@ def main(args):
     ax2.set_xlabel(f"PC 1 ({explained_variance[0]:.2%})")
     ax2.set_ylabel(f"PC 2 ({explained_variance[1]:.2%})")
 
-    # Plot PCA PC2 vs PC3 (bottom-left)
+    # --- Plot PCA PC2 vs PC3 (bottom-left) ---
     ax3 = axes[1, 0]
     ax3.set_title("PCA Projection", fontsize=12)
     ax3.grid(True, linestyle='--', alpha=0.6)
@@ -333,7 +272,7 @@ def main(args):
     ax3.set_xlabel(f"PC 2 ({explained_variance[1]:.2%})")
     ax3.set_ylabel(f"PC 3 ({explained_variance[2]:.2%})")
 
-    # Plot PCA PC1 vs PC3 (bottom-right)
+    # --- Plot PCA PC1 vs PC3 (bottom-right) ---
     ax4 = axes[1, 1]
     ax4.set_title("PCA Projection", fontsize=12)
     ax4.grid(True, linestyle='--', alpha=0.6)
@@ -342,41 +281,30 @@ def main(args):
     ax4.set_ylabel(f"PC 3 ({explained_variance[2]:.2%})")
 
     # --- 5. Final Touches & Save/Show ---
-    total_explained_variance_str = f"Total Explained Variance (3 components): {explained_variance.sum():.2%}"
-    fig.suptitle(f"Embedding Visualization for {Path(args.embeddings).name} ({embeddings.shape[1]}-D)\n{total_explained_variance_str}", fontsize=16)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
     
-    # Add shared legend for node types
-    fig.legend(handles=handles, title="Node Types", bbox_to_anchor=(1.0, 0.9), loc='upper left')
-
-    # Adjust layout to make space for suptitle and legend
-    fig.tight_layout(rect=[0, 0, 0.9, 0.95])
-
-    # Ensure the output directory exists
+    # Save the plot
     args.output.parent.mkdir(parents=True, exist_ok=True)
-
-    print(f"Saving figure to '{args.output}'")
-    plt.savefig(args.output, dpi=300, bbox_inches='tight')
-    print("Figure saved.")
-
+    plt.savefig(args.output, dpi=300)
+    print(f"Plot saved to '{args.output}'")
+    
+    # Optionally display the plot
+    if not args.no_show:
+        plt.show()
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description="Generate a 2D UMAP visualization of author embeddings.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
-    )
-    parser.add_argument('--embeddings', type=Path, required=True,
-                        help="Path to the saved author embeddings file (*.pt).")
-    parser.add_argument('--labels', type=Path,
-                        help="Path to author labels file (e.g., author_label.txt). Used for filtering, not coloring.")
-    parser.add_argument('--names', type=Path,
-                        help="Optional path to author names file (author_id<tab>name).")
+    parser = argparse.ArgumentParser(description="Visualize joint embeddings with UMAP and PCA.")
     parser.add_argument('--data-dir', type=Path, default='data',
-                        help="Directory containing the co-authorship file (AA.txt).")
+                        help="Path to the data directory, needed for name lookups.")
+    parser.add_argument('--embeddings', type=Path, required=True,
+                        help="Path to the saved joint embeddings file (*.pt).")
     parser.add_argument('--min-coauthors', type=int, default=0,
                         help="Minimum number of co-authorships required for an author to be visualized. Set to 0 to disable.")
     parser.add_argument('--output', type=Path, default='plots/umap_visualization.png',
                         help="Path to save the output plot.")
     parser.add_argument('--plot-types', type=str, nargs='+', default=['A', 'C', 'T'],
                         help="List of node types to include in the plot (e.g., 'A' 'C').")
+    parser.add_argument('--no-show', action='store_true',
+                        help="If set, the script will save the plot but not display it.")
     
     main(parser.parse_args()) 
