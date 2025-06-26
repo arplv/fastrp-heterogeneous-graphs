@@ -149,9 +149,17 @@ def main(args):
         val_pos_edge_index = split_data['val_pos_edge_index'] + node_offsets[src_type]
         all_pos_edges_count = train_pos_edge_index.size(1) + val_pos_edge_index.size(1)
     else:
-        print(f"Balancing training data for targets: {args.training_targets}")
-        edges_by_target = {}
+        print(f"Using raw training targets: {args.training_targets}")
+        
+        # De-duplicate targets by creating a canonical representation (e.g., A-T for both A-T and T-A)
+        canonical_targets = set()
         for target in args.training_targets:
+            parts = sorted(target.split('-'))
+            canonical_targets.add(f"{parts[0]}-{parts[1]}")
+        
+        print(f"Balancing canonical targets: {list(canonical_targets)}")
+        edges_by_target = {}
+        for target in canonical_targets:
             src_type, dst_type = target.split('-')
             is_symmetric = src_type == dst_type
             
@@ -182,15 +190,35 @@ def main(args):
         if not edges_by_target:
             raise ValueError("No valid training targets found. Aborting.")
 
-        # Balance by undersampling to the size of the smallest relation
-        min_edges = min(e.size(1) for e in edges_by_target.values())
-        print(f"Balancing all relations to {min_edges} edges each by undersampling.")
+        # Balance by oversampling to the size of the largest relation
+        if not edges_by_target:
+            print("Warning: No edges found for any target. Cannot proceed.")
+            return
+            
+        max_edges = max(e.size(1) for e in edges_by_target.values())
+        print(f"Balancing all relations to {max_edges} edges each by oversampling.")
 
         balanced_edges = []
         for target, edges in edges_by_target.items():
-            perm = torch.randperm(edges.size(1))
-            balanced_edges.append(edges[:, perm[:min_edges]])
-            print(f"  - Sampled {min_edges} edges for '{target}' (from {edges.size(1)})")
+            num_current_edges = edges.size(1)
+            
+            if num_current_edges == 0:
+                print(f"  - Warning: Skipping '{target}' as it has no edges.")
+                continue
+
+            if num_current_edges < max_edges:
+                # Oversample with replacement
+                indices = torch.randint(0, num_current_edges, (max_edges,), device=edges.device)
+                balanced_edges.append(edges[:, indices])
+                print(f"  - Oversampled '{target}' to {max_edges} edges (from {num_current_edges})")
+            else:
+                # This relation is already at max size, no sampling needed
+                balanced_edges.append(edges)
+                print(f"  - Using all {num_current_edges} edges for '{target}'")
+        
+        if not balanced_edges:
+            print("Error: No edges to train on after balancing. Aborting.")
+            return
 
         all_pos_edges = torch.cat(balanced_edges, dim=1).to(model_device)
         all_pos_edges_count = all_pos_edges.size(1)
