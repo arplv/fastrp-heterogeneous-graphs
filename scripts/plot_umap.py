@@ -110,7 +110,7 @@ def plot_2d_chart(ax, title, embeddings_2d, point_colors, plot_mask, label_str_t
 
     # Plot unlabeled points
     unlabeled_mask = (point_colors == -1) & plot_mask
-    ax.scatter(embeddings_2d[unlabeled_mask, 0], embeddings_2d[unlabeled_mask, 1], s=5, color='lightgray', alpha=0.2)
+    ax.scatter(embeddings_2d[unlabeled_mask, 0], embeddings_2d[unlabeled_mask, 1], s=5, color='lightgray', alpha=0.6)
 
     # Plot labeled points
     handles, labels = [], []
@@ -120,7 +120,7 @@ def plot_2d_chart(ax, title, embeddings_2d, point_colors, plot_mask, label_str_t
         mask = (point_colors == label_int) & plot_mask
         if np.any(mask):
             legend_label = area_names.get(label_str, label_str)
-            scatter = ax.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], s=10, color=cmap(label_int), label=legend_label, alpha=0.3)
+            scatter = ax.scatter(embeddings_2d[mask, 0], embeddings_2d[mask, 1], s=10, color=cmap(label_int), label=legend_label, alpha=0.6)
             handles.append(scatter)
             labels.append(legend_label)
 
