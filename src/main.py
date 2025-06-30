@@ -173,8 +173,37 @@ def main(args):
     if args.edge_split:
         print(f"Loading edge split from {args.edge_split}")
         split_data = torch.load(args.edge_split)
-        train_pos_edge_index = split_data['train_pos_edge_index'].to(model_device)
-        val_pos_edge_index = split_data['val_pos_edge_index'].to(model_device)
+        train_pos_edge_index = split_data['train_pos_edge_index']
+        val_pos_edge_index = split_data['val_pos_edge_index']
+        
+        # If we filtered nodes, we need to remap the edge indices
+        if args.min_degree > 0:
+            print("  Remapping edge indices for filtered nodes...")
+            
+            # Filter and remap training edges
+            train_mask = torch.zeros(train_pos_edge_index.size(1), dtype=torch.bool)
+            for i in range(train_pos_edge_index.size(1)):
+                src, dst = train_pos_edge_index[0, i].item(), train_pos_edge_index[1, i].item()
+                if src in original_to_filtered and dst in original_to_filtered:
+                    train_pos_edge_index[0, i] = original_to_filtered[src]
+                    train_pos_edge_index[1, i] = original_to_filtered[dst]
+                    train_mask[i] = True
+            
+            train_pos_edge_index = train_pos_edge_index[:, train_mask]
+            
+            # Filter and remap validation edges
+            val_mask = torch.zeros(val_pos_edge_index.size(1), dtype=torch.bool)
+            for i in range(val_pos_edge_index.size(1)):
+                src, dst = val_pos_edge_index[0, i].item(), val_pos_edge_index[1, i].item()
+                if src in original_to_filtered and dst in original_to_filtered:
+                    val_pos_edge_index[0, i] = original_to_filtered[src]
+                    val_pos_edge_index[1, i] = original_to_filtered[dst]
+                    val_mask[i] = True
+            
+            val_pos_edge_index = val_pos_edge_index[:, val_mask]
+        
+        train_pos_edge_index = train_pos_edge_index.to(model_device)
+        val_pos_edge_index = val_pos_edge_index.to(model_device)
         print(f"  Train positive edges: {train_pos_edge_index.size(1)}")
         print(f"  Validation positive edges: {val_pos_edge_index.size(1)}")
     else:
@@ -183,6 +212,7 @@ def main(args):
         train_adj.setdiag(0)
         train_adj.eliminate_zeros()
         all_pos_edges = torch.from_numpy(np.array(sp.triu(train_adj, k=1).nonzero())).long()
+        # Note: After filtering, the edge indices are already in the correct (filtered) space
         # Simple split for fallback
         perm = torch.randperm(all_pos_edges.size(1))
         val_size = int(all_pos_edges.size(1) * 0.1)

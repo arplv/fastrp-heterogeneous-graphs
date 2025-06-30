@@ -231,6 +231,28 @@ Input: Graph G, meta-paths P, embedding dimension d,
 
 ---
 
+## Node Filtering for Noise Reduction
+
+**Optional preprocessing step** to improve embedding quality by removing low-degree nodes:
+
+**Degree calculation**: For each author node $i$:
+$$d_i^{\text{total}} = \sum_{j \neq i} \mathbf{A}_{AA}[i,j] + \sum_{c} \mathbf{A}_{AC}[i,c] + \sum_{t} \mathbf{A}_{AT}[i,t]$$
+
+**Filtering criterion**: 
+$$\mathcal{V}_{\text{filtered}} = \{v \in \mathcal{V} : d_v^{\text{total}} \geq \tau\}$$
+
+Where $\tau$ is the minimum degree threshold.
+
+**Matrix re-indexing**: After filtering, all relation matrices are re-indexed to the filtered node space, ensuring computational consistency.
+
+**Benefits**:
+- Removes noisy, sparsely connected nodes
+- Improves clustering quality in visualizations  
+- Reduces computational overhead
+- Enhances model robustness
+
+---
+
 ## Hyperparameters Summary
 
 | Parameter | Symbol | Default | Description |
@@ -245,5 +267,6 @@ Input: Graph G, meta-paths P, embedding dimension d,
 | Entropy regularization | $\lambda_{\text{entropy}}$ | 0.0 | Weight for diversity loss |
 | Learning rate | $\eta$ | 0.01 | Adam optimizer step size |
 | Batch size | - | 4096 | Mini-batch size |
+| **Minimum degree threshold** | $\tau$ | 0 | **Filter nodes with degree < τ** |
 
 This mathematical framework enables the model to learn rich, multi-scale representations of heterogeneous graphs while maintaining computational efficiency and interpretability. 
