@@ -98,6 +98,64 @@ def main(args):
     print("Loading data...")
     relations, n_authors, _, _ = load_data(args.data_dir)
     print("Data loading complete.")
+    
+    # Apply node filtering based on minimum degree
+    if args.min_degree > 0:
+        print(f"Filtering nodes with degree < {args.min_degree}...")
+        
+        # Calculate total degree for each author (sum across all relation types)
+        total_degrees = np.zeros(n_authors)
+        for dst_type, matrix in relations.get('A', {}).items():
+            if dst_type == 'A':
+                # For author-author, count both directions but avoid double-counting diagonal
+                degrees = np.array(matrix.sum(axis=1)).flatten()
+                # Subtract identity matrix contribution to avoid inflating degrees
+                identity_contrib = np.array(sp.eye(n_authors).sum(axis=1)).flatten()
+                total_degrees += degrees - identity_contrib
+            else:
+                # For author-conference, author-term relationships
+                total_degrees += np.array(matrix.sum(axis=1)).flatten()
+        
+        # Create mask for nodes to keep
+        valid_nodes = total_degrees >= args.min_degree
+        valid_indices = np.where(valid_nodes)[0]
+        n_filtered = np.sum(valid_nodes)
+        
+        print(f"  Original authors: {n_authors}")
+        print(f"  Filtered authors: {n_filtered} (removed {n_authors - n_filtered} low-degree nodes)")
+        
+        # Filter relation matrices
+        filtered_relations = {}
+        for src_type, dst_relations in relations.items():
+            if src_type not in filtered_relations:
+                filtered_relations[src_type] = {}
+            for dst_type, matrix in dst_relations.items():
+                if src_type == 'A' and dst_type == 'A':
+                    # Filter both rows and columns for author-author matrix
+                    filtered_matrix = matrix[valid_indices, :][:, valid_indices]
+                elif src_type == 'A':
+                    # Filter only rows for author-X matrices
+                    filtered_matrix = matrix[valid_indices, :]
+                elif dst_type == 'A':
+                    # Filter only columns for X-author matrices
+                    filtered_matrix = matrix[:, valid_indices]
+                else:
+                    # Keep other matrices unchanged
+                    filtered_matrix = matrix
+                
+                filtered_relations[src_type][dst_type] = filtered_matrix.tocsr()
+        
+        # Update relations and author count
+        relations = filtered_relations
+        n_authors = n_filtered
+        
+        # Store the mapping from original indices to filtered indices for later use
+        original_to_filtered = {orig_idx: new_idx for new_idx, orig_idx in enumerate(valid_indices)}
+        filtered_to_original = {new_idx: orig_idx for new_idx, orig_idx in enumerate(valid_indices)}
+    else:
+        print("No degree filtering applied (min-degree=0)")
+        original_to_filtered = {i: i for i in range(n_authors)}
+        filtered_to_original = {i: i for i in range(n_authors)}
 
     model = FastRPModel(
         n_authors=n_authors,
@@ -288,7 +346,18 @@ def main(args):
     if args.output:
         print(f"Computing and saving final embeddings to {args.output}...")
         final_embeddings = model._mixed_embedding().detach().cpu()
-        torch.save(final_embeddings, args.output)
+        
+        # Create embedding dictionary with metadata
+        embedding_data = {
+            'embeddings': final_embeddings,
+            'filtered_to_original': filtered_to_original if args.min_degree > 0 else None,
+            'original_to_filtered': original_to_filtered if args.min_degree > 0 else None,
+            'min_degree_threshold': args.min_degree,
+            'n_original_authors': len(original_to_filtered) if args.min_degree > 0 else n_authors,
+            'n_filtered_authors': n_authors
+        }
+        
+        torch.save(embedding_data, args.output)
         print("Embeddings saved.")
 
     if args.save_model_path:
@@ -324,6 +393,7 @@ if __name__ == '__main__':
     parser.add_argument('--edge-split', type=str, default=None, help='Path to the pre-computed edge split file.')
     parser.add_argument('--patience', type=int, default=20, help='Number of epochs to wait for validation AUC improvement before early stopping.')
     parser.add_argument('--plot-path', type=str, default='plots/training_metrics.png', help='Path to save the training metrics plot.')
+    parser.add_argument('--min-degree', type=int, default=0, help='Minimum degree (total connections) required to include a node in training. Set to 0 to include all nodes.')
     
     args = parser.parse_args()
     main(args) 

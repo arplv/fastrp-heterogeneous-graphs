@@ -170,7 +170,27 @@ def main(args):
     # --- 1. Load Data ---
     print("Loading data...")
     try:
-        embeddings = torch.load(args.embeddings, map_location='cpu').numpy()
+        embedding_data = torch.load(args.embeddings, map_location='cpu')
+        
+        # Handle both old format (direct tensor) and new format (dictionary)
+        if isinstance(embedding_data, dict):
+            embeddings = embedding_data['embeddings'].numpy()
+            filtered_to_original = embedding_data.get('filtered_to_original', None)
+            min_degree_threshold = embedding_data.get('min_degree_threshold', 0)
+            n_original = embedding_data.get('n_original_authors', embeddings.shape[0])
+            n_filtered = embedding_data.get('n_filtered_authors', embeddings.shape[0])
+            
+            if filtered_to_original is not None:
+                print(f"  Loaded filtered embeddings: {n_filtered} authors (from {n_original} original)")
+                print(f"  Minimum degree threshold was: {min_degree_threshold}")
+            else:
+                print(f"  Loaded unfiltered embeddings: {embeddings.shape[0]} authors")
+        else:
+            # Old format - direct tensor
+            embeddings = embedding_data.numpy()
+            filtered_to_original = None
+            print(f"  Loaded embeddings: {embeddings.shape[0]} authors (legacy format)")
+            
     except FileNotFoundError:
         print(f"Error: Embeddings file not found at '{args.embeddings}'")
         return
@@ -181,6 +201,26 @@ def main(args):
     author_id_to_label_str, label_str_to_int = load_labels(args.labels)
     id_to_name = load_names(args.names) if args.names else {}
     area_names = load_area_names(args.data_dir / 'readme.txt')
+    
+    # If embeddings are filtered, remap author IDs to match the filtered indices
+    if filtered_to_original is not None:
+        print("  Remapping author IDs for filtered embeddings...")
+        
+        # Create new mappings using filtered indices
+        filtered_author_id_to_label_str = {}
+        filtered_id_to_name = {}
+        
+        for filtered_idx, original_idx in filtered_to_original.items():
+            if original_idx in author_id_to_label_str:
+                filtered_author_id_to_label_str[filtered_idx] = author_id_to_label_str[original_idx]
+            if original_idx in id_to_name:
+                filtered_id_to_name[filtered_idx] = id_to_name[original_idx]
+        
+        # Replace the original mappings
+        author_id_to_label_str = filtered_author_id_to_label_str
+        id_to_name = filtered_id_to_name
+        
+        print(f"    Mapped {len(author_id_to_label_str)} labels to filtered indices")
 
     # --- 2. Pre-processing & Filtering ---
     print("Pre-processing data...")
