@@ -223,7 +223,13 @@ def main(args):
         train_pos_edge_index = all_pos_edges[:, perm[val_size:]].to(model_device)
         val_pos_edge_index = all_pos_edges[:, perm[:val_size]].to(model_device)
 
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    if args.optimizer == 'sgd':
+        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    elif args.optimizer == 'adam':
+        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    else:
+        raise ValueError(f"Unknown optimizer: {args.optimizer}")
+    
     scheduler = ReduceLROnPlateau(optimizer, 'max', factor=0.5, patience=10)
     
     # Initialize metrics on the target device
@@ -456,6 +462,9 @@ if __name__ == '__main__':
     parser.add_argument('--beta', type=float, default=-1.0, help='Exponent for degree normalization of the meta-path matrix.')
     parser.add_argument('--epochs', type=int, default=30, help='Number of training epochs.')
     parser.add_argument('--lr', type=float, default=0.01, help='Learning rate.')
+    parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'], help='Optimizer to use for training.')
+    parser.add_argument('--momentum', type=float, default=0.9, help='Momentum for SGD optimizer (ignored for Adam).')
+    parser.add_argument('--weight-decay', type=float, default=0.0, help='Weight decay (L2 regularization) coefficient.')
     parser.add_argument('--lambda-entropy', type=float, default=0.0, help='Coefficient for entropy regularization. Set to 0 to disable, or a small value like 1e-4 to encourage diversity.')
     parser.add_argument('--neg-samples', type=int, default=3, help='Number of negative samples per positive sample.')
     parser.add_argument('--batch-size', type=int, default=4096, help='Training batch size')
