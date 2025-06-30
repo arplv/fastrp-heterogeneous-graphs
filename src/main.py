@@ -261,7 +261,7 @@ def main(args):
             
             neg_batch = negative_sampling(
                 edge_index=train_pos_edge_index, # Sample negatives from the whole graph
-                num_nodes=n_authors,
+                num_nodes=(n_authors, n_authors),  # Specify as tuple for symmetric graph
                 num_neg_samples=pos_batch.size(1) * args.neg_samples
             )
 
@@ -317,7 +317,7 @@ def main(args):
                 pos_batch = val_pos_edge_index[:, i:i+args.batch_size]
                 neg_batch = negative_sampling(
                     edge_index=train_pos_edge_index, # IMPORTANT: still sample negatives from the whole graph space
-                    num_nodes=n_authors,
+                    num_nodes=(n_authors, n_authors),  # Specify as tuple for symmetric graph
                     num_neg_samples=pos_batch.size(1) * args.neg_samples
                 )
                 idx_i = torch.cat([pos_batch[0], neg_batch[0]])
