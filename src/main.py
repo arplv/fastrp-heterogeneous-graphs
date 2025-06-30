@@ -172,7 +172,11 @@ def main(args):
     # Prepare training data: positive edges
     if args.edge_split:
         print(f"Loading edge split from {args.edge_split}")
-        split_data = torch.load(args.edge_split, weights_only=False)
+        try:
+            split_data = torch.load(args.edge_split, weights_only=False)
+        except TypeError:
+            # Fallback for older PyTorch versions
+            split_data = torch.load(args.edge_split)
         train_pos_edge_index = split_data['train_pos_edge_index']
         val_pos_edge_index = split_data['val_pos_edge_index']
         
@@ -379,7 +383,7 @@ def main(args):
             'final_train_loss': metrics_history['train_loss'][-1],
             'final_val_auc': metrics_history['val_auc'][-1] if metrics_history['val_auc'] else None
         }
-        torch.save(final_checkpoint, args.final_model_path, weights_only=False)
+        torch.save(final_checkpoint, args.final_model_path)
         print(f"  Final model saved to {args.final_model_path}")
         
         # Save final embeddings (current state)
@@ -399,7 +403,7 @@ def main(args):
             'is_final_epoch': True
         }
         
-        torch.save(final_embedding_data, args.final_embeddings_path, weights_only=False)
+        torch.save(final_embedding_data, args.final_embeddings_path)
         print(f"  Final embeddings saved to {args.final_embeddings_path}")
 
     # Load the best model state for best embedding generation and saving
@@ -425,7 +429,7 @@ def main(args):
             'is_best_model': True
         }
         
-        torch.save(embedding_data, args.output, weights_only=False)
+        torch.save(embedding_data, args.output)
         print("Best embeddings saved.")
 
     if args.save_model_path:
@@ -437,7 +441,7 @@ def main(args):
             'best_val_auc': best_val_auc,
             'is_best_model': True
         }
-        torch.save(checkpoint, args.save_model_path, weights_only=False)
+        torch.save(checkpoint, args.save_model_path)
         print("Best model saved.")
 
 
