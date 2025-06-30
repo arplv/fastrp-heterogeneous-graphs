@@ -170,7 +170,7 @@ def main(args):
     # --- 1. Load Data ---
     print("Loading data...")
     try:
-        embedding_data = torch.load(args.embeddings, map_location='cpu')
+        embedding_data = torch.load(args.embeddings, map_location='cpu', weights_only=False)
         
         # Handle both old format (direct tensor) and new format (dictionary)
         if isinstance(embedding_data, dict):

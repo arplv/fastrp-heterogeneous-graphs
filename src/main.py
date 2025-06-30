@@ -172,7 +172,7 @@ def main(args):
     # Prepare training data: positive edges
     if args.edge_split:
         print(f"Loading edge split from {args.edge_split}")
-        split_data = torch.load(args.edge_split)
+        split_data = torch.load(args.edge_split, weights_only=False)
         train_pos_edge_index = split_data['train_pos_edge_index']
         val_pos_edge_index = split_data['val_pos_edge_index']
         
