@@ -366,9 +366,45 @@ def main(args):
     # Plot metrics
     plot_metrics(metrics_history, args.plot_path)
 
-    # Load the best model state for final embedding generation and saving
+    # Save final model and embeddings if requested
+    if args.save_final:
+        print("Saving final epoch model and embeddings...")
+        
+        # Save final model state (current state)
+        final_args_dict = {k: v for k, v in vars(args).items() if k != 'relations'}
+        final_checkpoint = {
+            'args': final_args_dict,
+            'model_state_dict': model.state_dict(),
+            'epoch': len(metrics_history['train_loss']),
+            'final_train_loss': metrics_history['train_loss'][-1],
+            'final_val_auc': metrics_history['val_auc'][-1] if metrics_history['val_auc'] else None
+        }
+        torch.save(final_checkpoint, args.final_model_path, weights_only=False)
+        print(f"  Final model saved to {args.final_model_path}")
+        
+        # Save final embeddings (current state)
+        model.eval()
+        final_embeddings = model._mixed_embedding().detach().cpu()
+        
+        final_embedding_data = {
+            'embeddings': final_embeddings,
+            'filtered_to_original': filtered_to_original if args.min_degree > 0 else None,
+            'original_to_filtered': original_to_filtered if args.min_degree > 0 else None,
+            'min_degree_threshold': args.min_degree,
+            'n_original_authors': len(original_to_filtered) if args.min_degree > 0 else n_authors,
+            'n_filtered_authors': n_authors,
+            'epoch': len(metrics_history['train_loss']),
+            'final_train_loss': metrics_history['train_loss'][-1],
+            'final_val_auc': metrics_history['val_auc'][-1] if metrics_history['val_auc'] else None,
+            'is_final_epoch': True
+        }
+        
+        torch.save(final_embedding_data, args.final_embeddings_path, weights_only=False)
+        print(f"  Final embeddings saved to {args.final_embeddings_path}")
+
+    # Load the best model state for best embedding generation and saving
     if best_model_state:
-        print("Loading best model state...")
+        print("Loading best model state for best embeddings...")
         model.load_state_dict(best_model_state)
     
     model.eval()
@@ -384,11 +420,13 @@ def main(args):
             'original_to_filtered': original_to_filtered if args.min_degree > 0 else None,
             'min_degree_threshold': args.min_degree,
             'n_original_authors': len(original_to_filtered) if args.min_degree > 0 else n_authors,
-            'n_filtered_authors': n_authors
+            'n_filtered_authors': n_authors,
+            'best_val_auc': best_val_auc,
+            'is_best_model': True
         }
         
-        torch.save(embedding_data, args.output)
-        print("Embeddings saved.")
+        torch.save(embedding_data, args.output, weights_only=False)
+        print("Best embeddings saved.")
 
     if args.save_model_path:
         print(f"Saving model checkpoint to {args.save_model_path}...")
@@ -396,9 +434,11 @@ def main(args):
         checkpoint = {
             'args': args_dict,
             'model_state_dict': model.state_dict(),
+            'best_val_auc': best_val_auc,
+            'is_best_model': True
         }
-        torch.save(checkpoint, args.save_model_path)
-        print("Model saved.")
+        torch.save(checkpoint, args.save_model_path, weights_only=False)
+        print("Best model saved.")
 
 
 if __name__ == '__main__':
@@ -424,6 +464,9 @@ if __name__ == '__main__':
     parser.add_argument('--patience', type=int, default=20, help='Number of epochs to wait for validation AUC improvement before early stopping.')
     parser.add_argument('--plot-path', type=str, default='plots/training_metrics.png', help='Path to save the training metrics plot.')
     parser.add_argument('--min-degree', type=int, default=0, help='Minimum degree (total connections) required to include a node in training. Set to 0 to include all nodes.')
+    parser.add_argument('--save-final', action='store_true', help='Save embeddings and model from the final epoch (in addition to best model).')
+    parser.add_argument('--final-embeddings-path', type=str, default='final_embeddings.pt', help='Path to save final epoch embeddings.')
+    parser.add_argument('--final-model-path', type=str, default='final_model.pth', help='Path to save final epoch model checkpoint.')
     
     args = parser.parse_args()
     main(args) 

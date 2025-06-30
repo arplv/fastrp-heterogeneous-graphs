@@ -78,4 +78,29 @@ The visualization will show:
 - Embedding files store mapping metadata for reconstruction
 - Compatible with all existing meta-paths and parameters
 
-This preprocessing step can significantly improve both training efficiency and result quality by focusing on the most informative parts of the heterogeneous graph. 
+This preprocessing step can significantly improve both training efficiency and result quality by focusing on the most informative parts of the heterogeneous graph.
+
+## Saving Options
+
+### Default Behavior (Best Model Only)
+```bash
+python src/main.py --epochs 30 --output best_embeddings.pt --save-model-path best_model.pth
+```
+Saves only the model state with highest validation AUC.
+
+### Save Both Best and Final States
+```bash
+python src/main.py --epochs 30 \
+    --output best_embeddings.pt --save-model-path best_model.pth \
+    --save-final --final-embeddings-path final_embeddings.pt --final-model-path final_model.pth
+```
+
+This creates:
+- `best_embeddings.pt` & `best_model.pth`: Highest validation AUC
+- `final_embeddings.pt` & `final_model.pth`: Final training epoch
+
+### Use Cases for Final Model
+- **Continued training**: Resume from exact final state
+- **Analysis**: Compare best vs. final performance
+- **Debugging**: Examine overfitting behavior
+- **Research**: Study training dynamics 
