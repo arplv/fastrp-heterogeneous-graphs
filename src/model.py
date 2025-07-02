@@ -96,7 +96,10 @@ class FastRPModel(nn.Module):
                 U_prev_sparse = U_curr_sparse
         
         # Shape: (F, N, D) where F = num_paths * num_powers
-        self.features = torch.stack(features_list, dim=0).to(self.device)
+        # We turn the stacked tensor into a learnable parameter so that the training
+        # loop can fine-tune the projected features instead of keeping them frozen.
+        features_tensor = torch.stack(features_list, dim=0).to(self.device)
+        self.features = nn.Parameter(features_tensor, requires_grad=True)
 
     def _create_random_projection_matrix(self, n_nodes, dim, alpha, degrees, s):
         rng = np.random.default_rng(42)

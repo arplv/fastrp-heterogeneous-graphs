@@ -11,3 +11,24 @@ __pycache__/
 
 # Embeddings output
 *.npy 
+
+# === LaTeX ===
+*.aux
+*.log
+*.nav
+*.out
+*.snm
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# PDF/diapos
+*.pdf
+
+# Sources LaTeX que vous ne voulez pas suivre
+*.tex
+*.md          # (enlevez cette ligne si vous voulez garder les README/notes Markdown)
+
+# Dossiers de sortie
+plots/
