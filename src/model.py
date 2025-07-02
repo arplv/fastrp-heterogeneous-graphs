@@ -43,13 +43,14 @@ def scipy_to_torch_sparse(matrix: sp.csr_matrix, device: torch.device) -> torch.
     return torch.sparse_coo_tensor(i, v, torch.Size(shape), device=device)
 
 class FastRPModel(nn.Module):
-    def __init__(self, n_authors: int, dim: int, meta_paths: List[str], relations: Dict[str, Dict[str, sp.csr_matrix]], num_powers: int, alpha: float, beta: float, s: int, device: str = 'cpu'):
+    def __init__(self, n_authors: int, dim: int, meta_paths: List[str], relations: Dict[str, Dict[str, sp.csr_matrix]], num_powers: int, alpha: float, beta: float, s: int, device: str = 'cpu', apply_softmax: bool = True):
         super().__init__()
         self.device = torch.device(device)
         self.dim = dim
         self.feature_weights = nn.Parameter(torch.ones(len(meta_paths), num_powers))
         self.intercept = nn.Parameter(torch.tensor(0.0))
         self.slope = nn.Parameter(torch.tensor(1.0))
+        self.apply_softmax = apply_softmax
         
         # --- Feature Generation (Efficient Pre-computation) ---
         # Create the initial random projection matrix.
@@ -130,8 +131,19 @@ class FastRPModel(nn.Module):
         return normalizer @ mat
 
     def _mixed_embedding(self):
+        """Combine les caractéristiques pré-calculées.
+
+        Si self.apply_softmax == True (par défaut), on applique un soft-max
+        afin d'obtenir des poids positifs qui somment à 1.  Sinon, on utilise
+        directement les paramètres θ bruts (ce qui peut donner des poids
+        négatifs ou non normalisés – utile pour des expériences)."""
+
         # weights: (n_paths, n_powers) -> flatten -> (F)
-        w = F.softmax(self.feature_weights.flatten(), dim=0)
+        if self.apply_softmax:
+            w = F.softmax(self.feature_weights.flatten(), dim=0)
+        else:
+            w = self.feature_weights.flatten()
+
         # einsum: w_f * X_fnd -> nd
         return torch.einsum('f,fnd->nd', w, self.features)
 

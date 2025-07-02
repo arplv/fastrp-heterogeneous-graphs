@@ -176,6 +176,10 @@ def main(args):
     model.intercept.requires_grad_(False)
     print("[Expérience] Slope (lambda) fixé à 1.0 et intercept (gamma) fixé à 0.0 — non entraînables.")
 
+    # EXPÉRIMENTATION : utiliser directement les θ bruts (sans softmax) pour combiner les features
+    model.apply_softmax = False
+    print("[Expérience] Combinaison des caractéristiques sans softmax — θ bruts utilisés.")
+
     # Prepare training data: positive edges
     if args.edge_split:
         print(f"Loading edge split from {args.edge_split}")
