@@ -366,9 +366,14 @@ def main(args):
         print(f"  Val Accuracy: {metrics_history['val_acc'][-1]:.4f} | Val Precision: {metrics_history['val_precision'][-1]:.4f} | Val Recall: {metrics_history['val_recall'][-1]:.4f} | Val F1: {metrics_history['val_f1'][-1]:.4f}")
 
         with torch.no_grad():
-            weights_softmax = F.softmax(model.feature_weights.flatten(), dim=0).cpu().numpy()
             print(f"  Slope: {model.slope.item():.4f} | Intercept: {model.intercept.item():.4f}")
-            print(f"  Feature Weights (softmax): {np.array2string(weights_softmax, precision=4, suppress_small=True)}")
+
+            if getattr(model, 'apply_softmax', True):
+                weights_disp = F.softmax(model.feature_weights.flatten(), dim=0).cpu().numpy()
+                print(f"  Feature Weights (softmax): {np.array2string(weights_disp, precision=4, suppress_small=True)}")
+            else:
+                weights_disp = model.feature_weights.flatten().detach().cpu().numpy()
+                print(f"  Feature Weights (theta raw): {np.array2string(weights_disp, precision=4, suppress_small=True)}")
 
         if epoch_val_auc > best_val_auc:
             best_val_auc = epoch_val_auc
