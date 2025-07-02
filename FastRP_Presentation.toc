@@ -1,0 +1,8 @@
+\beamer@sectionintoc {1}{Définition du problème et motivation}{3}{0}{1}
+\beamer@sectionintoc {2}{Fondements théoriques}{6}{0}{2}
+\beamer@sectionintoc {3}{Algorithme et implémentation}{7}{0}{3}
+\beamer@sectionintoc {4}{Optimisation et apprentissage}{15}{0}{4}
+\beamer@sectionintoc {5}{Optimisation des paramètres}{16}{0}{5}
+\beamer@sectionintoc {6}{Avantages vs marches aléatoires}{17}{0}{6}
+\beamer@sectionintoc {7}{Résultats et performances}{19}{0}{7}
+\beamer@sectionintoc {8}{Points essentiels}{22}{0}{8}

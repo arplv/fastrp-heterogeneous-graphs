@@ -1,0 +1,148 @@
+\documentclass[9pt,aspectratio=169,professionalfonts]{beamer}
+\usetheme{Madrid}
+\usecolortheme{default}
+\setbeamertemplate{navigation symbols}{}
+
+% Encodage et langue
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+
+% Packages usuels
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usepackage{listings}
+
+% Style listings
+\lstset{language=Python,basicstyle=\ttfamily\footnotesize,showstringspaces=false,breaklines=true,frame=single}
+
+% Commandes utiles
+\newcommand{\checkmarkfr}{\ding{51}}
+
+% Titre
+\title[Projection aléatoire]{Projection aléatoire : embeddings efficaces pour graphes hétérogènes}
+\subtitle{Présentation technique de 30 minutes}
+\author{Nom Prénom}
+\institute{Institution}
+\date{\today}
+
+\begin{document}
+
+%———————————————————————————————————
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{Plan}
+  \tableofcontents
+\end{frame}
+
+%———————————————————————————————————
+\section{Contexte et motivation}
+
+\begin{frame}{Défi : réseau bibliographique}
+\begin{block}{Jeu de données}
+\begin{itemize}
+  \item 28\,702 auteurs
+  \item 20 conférences
+  \item 8\,920 termes
+  \item Types de relations : Auteur–Auteur, Auteur–Conférence, Auteur–Terme
+\end{itemize}
+\end{block}
+\begin{block}{Objectif}
+Apprendre des embeddings de dimension 256 préservant la sémantique afin de prédire de nouvelles collaborations.
+\end{block}
+\end{frame}
+
+%———————————————————————————————————
+\section{Limites des marches aléatoires}
+
+\begin{frame}{Méthode classique : Node2Vec / MetaPath2Vec}
+\begin{block}{Algorithme}
+\begin{itemize}
+  \item Pour chaque nœud : générer des marches aléatoires ("phrases")
+  \item Entraîner Word2Vec (Skip-gram) sur ces séquences
+\end{itemize}
+\end{block}
+\begin{alertblock}{Problèmes}
+\begin{itemize}
+  \item Coût computationnel et mémoire élevés
+  \item Biais d'échantillonnage (structure globale manquante)
+  \item Sensibilité aux hyperparamètres
+\end{itemize}
+\end{alertblock}
+\end{frame}
+
+%———————————————————————————————————
+\section{Projection aléatoire : intuition}
+
+\begin{frame}{Idée principale}
+\begin{enumerate}
+  \item Créer une matrice aléatoire creuse $\mathbf R$
+  \item Appliquer directement les puissances de la matrice de voisinage $\mathbf M$ : $\mathbf M\mathbf R,\;\mathbf M^2\mathbf R,\;\mathbf M^3\mathbf R$
+  \item Combiner ces vues avec des poids apprenables (softmax)
+\end{enumerate}
+\end{frame}
+
+%———————————————————————————————————
+\section{Fondements théoriques}
+
+\begin{frame}{Lemme de Johnson–Lindenstrauss}
+\begin{theorem}
+Toute distribution aléatoire satisfaisant les hypothèses du lemme préserve les distances avec un facteur $(1\pm\varepsilon)$ après projection dans $O(\log n)$ dimensions.
+\end{theorem}
+\end{frame}
+
+%———————————————————————————————————
+\section{Algorithme complet}
+
+\begin{frame}{Étapes}
+\begin{enumerate}
+ \item Projection aléatoire pondérée (paramètre $\alpha$)
+ \item Construction / normalisation des méta-chemins (paramètre $\beta$)
+ \item Calcul itératif des puissances $\mathbf U_1,\mathbf U_2,\mathbf U_3$
+ \item Combinaison linéaire \(w_f\) $\rightarrow$ embedding final
+ \item Perte : BCE + régularisation entropique
+\end{enumerate}
+\end{frame}
+
+%———————————————————————————————————
+\section{Optimisation}
+
+\begin{frame}{Fonction de perte}
+\[
+\mathcal L = \mathrm{BCE}(\gamma-\lambda\|\mathbf e_i-\mathbf e_j\|^2, y_{ij}) + \lambda_{\mathrm{entropy}}\sum_f w_f\log w_f
+\]
+Gradients calculés par rétro-propagation ; mise à jour de $\theta_f,\lambda,\gamma$ avec Adam.
+\end{frame}
+
+%———————————————————————————————————
+\section{Résultats expérimentaux}
+
+\begin{frame}{Performances}
+\begin{itemize}
+  \item AUC validation : 0,94
+  \item 6 × plus rapide que Node2Vec
+  \item Interprétable : les poids montrent l'importance des conférences (ACA)
+\end{itemize}
+\end{frame}
+
+%———————————————————————————————————
+\section{Conclusion}
+
+\begin{frame}{Points essentiels}
+\begin{itemize}
+  \item Projection aléatoire + puissances de matrice = embeddings efficaces
+  \item Théorie garantie par Johnson–Lindenstrauss
+  \item Scalabilité linéaire et support naturel des graphes hétérogènes
+\end{itemize}
+\end{frame}
+
+%———————————————————————————————————
+\begin{frame}{Questions ?}
+\centering
+\Huge Merci de votre attention !
+\end{frame}
+
+\end{document} 

@@ -1,0 +1,11 @@
+\babel@toc {french}{}\relax 
+\beamer@sectionintoc {1}{Définition du problème et motivation}{3}{0}{1}
+\beamer@sectionintoc {2}{Limites des marches aléatoires}{4}{0}{2}
+\beamer@sectionintoc {3}{Projection aléatoire : intuition}{5}{0}{3}
+\beamer@sectionintoc {4}{Fondements théoriques}{6}{0}{4}
+\beamer@sectionintoc {5}{Algorithme et implémentation}{7}{0}{5}
+\beamer@sectionintoc {6}{Optimisation et apprentissage}{15}{0}{6}
+\beamer@sectionintoc {7}{Comparaison avec les marches aléatoires}{16}{0}{7}
+\beamer@sectionintoc {8}{Résultats et performances}{18}{0}{8}
+\beamer@sectionintoc {9}{Résumé comparatif}{20}{0}{9}
+\beamer@sectionintoc {10}{Points essentiels}{21}{0}{10}

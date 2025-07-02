@@ -1,0 +1,670 @@
+\documentclass[9pt,aspectratio=169,professionalfonts]{beamer}
+\usetheme{Madrid}
+\usecolortheme{default}
+\setbeamertemplate{navigation symbols}{}
+
+% Encodage et langue
+\usepackage[T1]{fontenc}
+\usepackage[french]{babel}
+
+% Packages usuels
+\usepackage{amsmath,amssymb}
+\usepackage{listings}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{etoolbox}
+
+% Symbole checkmark générique
+\providecommand{\checkmark}{\textbf{✓}}
+
+% Style listings
+\lstset{
+    language=Python,
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\color{blue},
+    commentstyle=\color{green!50!black},
+    stringstyle=\color{red},
+    showstringspaces=false,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!10}
+}
+
+% Réduction automatique de la taille dans les blocs pour éviter les débordements
+\AtBeginEnvironment{block}{\small}
+\AtBeginEnvironment{exampleblock}{\small}
+\AtBeginEnvironment{alertblock}{\small}
+
+% Titre
+\title[Projection aléatoire pour graphes hétérogènes]{Projection aléatoire : embeddings efficaces pour graphes hétérogènes}
+\subtitle{Présentation technique de 30 minutes}
+\author{Votre Nom}
+\institute{Votre Institution}
+\date{\today}
+
+\begin{document}
+
+%———————————————————————————————————
+\begin{frame}
+  \titlepage
+\end{frame}
+
+%———————————————————————————————————
+\begin{frame}{Plan de la présentation (30 minutes)}
+  \tableofcontents
+\end{frame}
+
+%=================================================================
+\section{Définition du problème et motivation}
+
+\begin{frame}{Le défi : embeddings pour un réseau bibliographique}
+\begin{block}{Notre jeu de données}
+\begin{itemize}
+    \item 28\,702 auteurs
+    \item 20 conférences
+    \item 8\,920 termes
+    \item Relations multiples : Auteur–Auteur, Auteur–Conférence, Auteur–Terme
+\end{itemize}
+\end{block}
+
+\begin{block}{Objectif}
+Apprendre des embeddings de dimension 256 qui capturent la sémantique afin de prédire les collaborations futures.
+\end{block}
+
+\begin{alertblock}{Pourquoi est-ce difficile ?}
+\begin{itemize}
+    \item Graphe hétérogène (plusieurs types de nœuds)
+    \item Connectivité clairsemée
+    \item Passage à l'échelle : >28 000 nœuds
+    \item Complexité sémantique : chaque relation a un sens différent
+\end{itemize}
+\end{alertblock}
+\end{frame}
+
+%=================================================================
+\section{Limites des marches aléatoires}
+
+\begin{frame}{Approche traditionnelle : marches aléatoires}
+\begin{block}{Algorithme classique}
+\begin{itemize}
+    \item Pour chaque nœud :
+    \begin{itemize}
+        \item Générer des marches aléatoires : $A \rightarrow C \rightarrow A \rightarrow T \rightarrow A \rightarrow \dots$
+        \item Considérer les marches comme des « phrases »
+        \item Appliquer Word2Vec (Skip-gram) pour apprendre les embeddings
+    \end{itemize}
+\end{itemize}
+\end{block}
+
+\begin{alertblock}{Problèmes}
+\begin{itemize}
+    \item \textbf{Coût computationnel :} millions de marches nécessaires
+    \item \textbf{Mémoire :} stockage de toutes les séquences
+    \item \textbf{Biais d'échantillonnage :} perte de la structure globale
+    \item \textbf{Sensibilité aux hyperparamètres :} longueur et nombre de marches
+\end{itemize}
+\end{alertblock}
+
+\textbf{Exemple :} pour 28\,000 auteurs, 10 marches × 100 pas = 28 M de pas !
+\end{frame}
+
+%=================================================================
+\section{Projection aléatoire : intuition}
+
+\begin{frame}{Notre solution : éviter les marches}
+\begin{block}{Idée clé}
+\begin{enumerate}
+    \item \textbf{Créer une matrice aléatoire creuse} $\mathbf R$ (calcul économique)
+    \item \textbf{Appliquer directement les opérations de graphe :} $\mathbf M \mathbf R$, $\mathbf M^2 \mathbf R$, $\mathbf M^3 \mathbf R$
+    \item \textbf{Combiner intelligemment} les caractéristiques via des poids appris
+\end{enumerate}
+\end{block}
+
+\begin{block}{Pourquoi cela fonctionne-t-il ?}
+Le lemme de Johnson–Lindenstrauss garantit que les projections aléatoires préservent les distances dans les espaces de grande dimension.
+\end{block}
+
+\begin{exampleblock}{Analogie}
+Au lieu d'explorer une ville en marchant au hasard, on prend des photos aériennes sous différents angles puis on les combine !
+\end{exampleblock}
+\end{frame}
+
+%=================================================================
+\section{Fondements théoriques}
+
+\begin{frame}{Lemme de Johnson–Lindenstrauss}
+\begin{theorem}[Lemme de Johnson–Lindenstrauss (1984)]
+Pour tout ensemble de $n$ points dans un espace de grande dimension, il existe une projection dans $O(\log n)$ dimensions qui préserve toutes les distances paires dans $(1\pm\varepsilon)$.
+\end{theorem}
+
+\begin{block}{Formulation formelle}
+Pour des points $\mathbf{x}_1,\dots, \mathbf{x}_n \in \mathbb R^d$, il existe une matrice aléatoire $\mathbf R \in \mathbb R^{d\times k}$, avec $k = O(\log n/\varepsilon^2)$, telle que :
+
+$$\boxed{(1-\varepsilon)\,\lVert\mathbf x_i-\mathbf x_j\rVert^2 \le \lVert\mathbf R^T\mathbf x_i-\mathbf R^T\mathbf x_j\rVert^2 \le (1+\varepsilon)\,\lVert\mathbf x_i-\mathbf x_j\rVert^2}$$
+\end{block}
+
+\begin{block}{Conséquences pour nous}
+\begin{itemize}
+    \item Les projections aléatoires préservent la structure de voisinage.
+    \item On peut travailler dans des dimensions plus basses sans perte significative.
+    \item Fournit une garantie théorique pour notre approche.
+\end{itemize}
+\end{block}
+\end{frame}
+
+%=================================================================
+\section{Algorithme et implémentation}
+
+%-------------------------------
+\begin{frame}{Étape 1 : construction de la matrice de projection}
+\begin{block}{Dimensions}
+$\mathbf R \in \mathbb R^{n\times d}$ (28\,702 × 256 dans notre cas)
+\end{block}
+
+\begin{block}{Motif de sparsité}
+Chaque colonne possède exactement $s=3$ éléments non nuls :
+$$\mathbf R_{ij} = \begin{cases}
+\tfrac{+1}{\sqrt s} & \text{avec probabilité } \tfrac{s}{n}\\[2pt]
+\tfrac{-1}{\sqrt s} & \text{avec probabilité } \tfrac{s}{n}\\[2pt]
+0 & \text{sinon}
+\end{cases}$$
+\end{block}
+
+\begin{exampleblock}{Exemple pour 6 auteurs, 4 dimensions, $s=2$}
+$$\mathbf R = \begin{bmatrix}
+0 & +0.7 & 0 & -0.7 \\
+-0.7 & 0 & +0.7 & 0 \\
+0 & 0 & -0.7 & +0.7 \\
++0.7 & -0.7 & 0 & 0 \\
+0 & +0.7 & -0.7 & 0 \\
+-0.7 & 0 & 0 & +0.7
+\end{bmatrix}$$
+\end{exampleblock}
+\end{frame}
+
+%-------------------------------
+\begin{frame}{Étape 2 : pondération par degré ($\alpha$)}
+\begin{alertblock}{Problème}
+Les nœuds de haut degré (auteurs prolifiques) dominent les embeddings.
+\end{alertblock}
+
+\begin{block}{Solution}
+Pondération par degré avec $\alpha=-0.5$ :
+$$\boxed{\mathbf R' = \mathbf D^{\alpha}\,\mathbf R}$$
+\end{block}
+
+\begin{exampleblock}{Exemple avec $\alpha=-0.5$}
+\begin{align*}
+\text{Degrés des auteurs :} &\; [100, 10, 5, 50, 20, 8]\\
+\mathbf D^{-0.5} &= \text{diag}([0.10, 0.32, 0.45, 0.14, 0.22, 0.35])\\[4pt]
+\text{Avant pondération :} \\
+A_1 &:\; [0, +0.7, 0, -0.7]\\
+A_2 &:\; [-0.7, 0, +0.7, 0]\\[4pt]
+\text{Après pondération :} \\
+A_1 &:\; [0, +0.07, 0, -0.07] \; \text{\color{red}(Atténué)}\\
+A_2 &:\; [-0.22, 0, +0.22, 0] \; \text{\color{blue}(Amplifié)}
+\end{align*}
+\end{exampleblock}
+\end{frame}
+
+%-------------------------------
+\begin{frame}{Étape 3 : matrices d'adjacence des méta-chemins}
+\begin{block}{Capturer la sémantique}
+\begin{align}
+\textbf{ACA}\; (Auteur–Conférence–Auteur): &\; \mathbf M_{ACA} = \mathbf A_{AC}\mathbf A_{CA}\\
+\textbf{ATA}\; (Auteur–Terme–Auteur): &\; \mathbf M_{ATA} = \mathbf A_{AT}\mathbf A_{TA}\\
+\textbf{AAA}\; (Auteur–Auteur–Auteur): &\; \mathbf M_{AAA} = \mathbf A_{AA}\mathbf A_{AA}
+\end{align}
+\end{block}
+
+\begin{block}{Exemple de dimensions}
+\begin{itemize}
+    \item $\mathbf A_{AC}$ : 28\,702 × 20 (auteurs × conférences)
+    \item $\mathbf A_{CA}$ : 20 × 28\,702 (conférences × auteurs)
+    \item $\mathbf M_{ACA}$ : 28\,702 × 28\,702 (auteurs × auteurs)
+\end{itemize}
+\end{block}
+
+\begin{block}{Interprétation}
+$\mathbf M_{ACA}[i,j]$ = nombre de conférences dans lesquelles les auteurs $i$ et $j$ ont co-publié.
+\end{block}
+\end{frame}
+
+%-------------------------------
+\begin{frame}{Étape 4 : normalisation ($\beta$)}
+\begin{alertblock}{Problème}
+Certains auteurs ont beaucoup de connexions, d'autres très peu.
+\end{alertblock}
+
+\begin{block}{Solution}
+Normalisation par ligne avec $\beta=-1.0$ :
+$$\boxed{\tilde{\mathbf M} = \mathbf D^{\beta}\,\mathbf M}$$
+\end{block}
+
+\begin{exampleblock}{Exemple}
+\begin{align*}
+\text{Sommes de lignes brutes de }\mathbf M_{ACA} &: [50, 5, 100, 20] \\[-2pt]
+\mathbf D^{-1} &= \text{diag}([1/50, 1/5, 1/100, 1/20])\\[4pt]
+\text{Avant normalisation} &: \; [10, 5, 30, 5] \text{ (conférences partagées)}\\[2pt]
+\text{Après normalisation} &: \; [0.2, 0.1, 0.6, 0.1] \text{ (probabilités)}
+\end{align*}
+\end{exampleblock}
+\end{frame}
+
+%-------------------------------
+\begin{frame}{Étape 5 : génération des caractéristiques}
+\begin{block}{Innovation clé}
+Au lieu de calculer explicitement $\mathbf M^2$ ou $\mathbf M^3$, on itère :
+\end{block}
+
+\textbf{Algorithme des puissances (itératif)}
+\begin{itemize}
+    \item $\mathbf U_0 = \mathbf R'$ \quad (matrice aléatoire pondérée)
+    \item $\mathbf U_1 = \text{normalize}(\tilde{\mathbf M}\,\mathbf U_0)$ \quad (caractéristiques à 1 saut)
+    \item $\mathbf U_2 = \text{normalize}(\tilde{\mathbf M}\,\mathbf U_1)$ \quad (2 sauts)
+    \item $\mathbf U_3 = \text{normalize}(\tilde{\mathbf M}\,\mathbf U_2)$ \quad (3 sauts)
+\end{itemize}
+
+\begin{exampleblock}{Exemple concret (méta-chemin ACA)}
+\begin{align*}
+\mathbf U_0 &= \mathbf R' \in \mathbb R^{28,702\times256} \quad \text{(caractéristiques initiales)}\\
+\mathbf U_1 &= \tilde{\mathbf M}_{ACA}\,\mathbf U_0 \quad \text{(auteurs reliés via 1 conférence)}\\
+\mathbf U_2 &= \tilde{\mathbf M}_{ACA}\,\mathbf U_1 \quad \text{(via 2 conférences)}\\
+\mathbf U_3 &= \tilde{\mathbf M}_{ACA}\,\mathbf U_2 \quad \text{(via 3 conférences)}
+\end{align*}
+\end{exampleblock}
+
+\begin{alertblock}{Efficacité mémoire}
+Ne jamais stocker $\tilde{\mathbf M}^2$ ou $\tilde{\mathbf M}^3$ (28k × 28k × 8 o $\approx$ 6,4 Go chacun !)
+\end{alertblock}
+\end{frame}
+
+%-------------------------------
+\begin{frame}{Étape 6 : collecte multi-échelle des caractéristiques}
+\begin{block}{Pour chaque couple méta-chemin × puissance}
+\begin{align*}
+\text{Méta-chemins :} &\; [AAA, ACA, ATA]\\
+\text{Puissances :} &\; [1, 2, 3]\\
+\text{Nombre total de matrices :} &\; 3\times3 = 9\\[4pt]
+\text{Tenseur de caractéristiques :} &\; \mathbf F \in \mathbb R^{9\times28,702\times256}
+\end{align*}
+\end{block}
+
+\begin{block}{Interprétation}
+\begin{itemize}
+    \item $\mathbf F[0]$ : AAA$^1$ – collaborations directes
+    \item $\mathbf F[1]$ : AAA$^2$ – collaborations à 2 sauts
+    \item $\mathbf F[2]$ : AAA$^3$ – collaborations à 3 sauts
+    \item $\mathbf F[3]$ : ACA$^1$ – conférences partagées
+    \item $\mathbf F[4]$ : ACA$^2$ – communautés de conférence
+    \item $\mathbf F[5]$ : ACA$^3$ – domaines de recherche élargis
+    \item $\mathbf F[6]$ : ATA$^1$ – mots-clés partagés
+    \item $\mathbf F[7]$ : ATA$^2$ – voisinages thématiques
+    \item $\mathbf F[8]$ : ATA$^3$ – domaines de recherche
+\end{itemize}
+\end{block}
+\end{frame}
+
+%-------------------------------
+\begin{frame}{Étape 7 : combinaison de caractéristiques}
+\begin{alertblock}{Problème}
+Quelles caractéristiques sont les plus importantes ? Laissons le modèle l'apprendre !
+\end{alertblock}
+
+\begin{block}{Poids apprenables (softmax)}
+\begin{align}
+\boldsymbol{\theta} &\in \mathbb R^9\\
+\mathbf w &= \text{softmax}(\boldsymbol{\theta}) \quad \bigl(\sum_i w_i = 1\bigr)\\[4pt]
+\mathbf Z &= \sum_{i=0}^{8} w_i\,\mathbf F[i] \quad \text{(embedding final)}
+\end{align}
+\end{block}
+
+\begin{exampleblock}{Exemple de poids appris}
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+AAA$^1$: 0.05 & AAA$^2$: 0.12 & AAA$^3$: 0.08 \\
+\textbf{ACA$^1$: 0.25} & \textbf{ACA$^2$: 0.30} & \textbf{ACA$^3$: 0.15} \\
+ATA$^1$: 0.02 & ATA$^2$: 0.02 & ATA$^3$: 0.01 \\
+\bottomrule
+\end{tabular}
+\end{center}
+\textbf{Observation :} le modèle apprend que les relations de conférence sont les plus prédictives !
+\end{exampleblock}
+\end{frame}
+
+%-------------------------------
+\begin{frame}{Étape 8 : prédiction de lien par distance}
+\begin{block}{Score basé sur la distance}
+Pour les auteurs $i$ et $j$, on obtient les embeddings $\mathbf z_i, \mathbf z_j \in \mathbb R^{256}$ :
+
+\begin{align}
+\text{distance}^2 &= \lVert\mathbf z_i - \mathbf z_j\rVert^2 = \sum_{k=1}^{256} (z_{i,k} - z_{j,k})^2\\[4pt]
+\text{probabilité} &= \sigma(\gamma - \lambda\,\text{distance}^2)
+\end{align}
+\end{block}
+
+\begin{block}{Intuition}
+\begin{itemize}
+    \item Petite distance \(\Rightarrow\) forte probabilité de collaboration
+    \item Grande distance \(\Rightarrow\) faible probabilité
+\end{itemize}
+\end{block}
+
+\begin{block}{Paramètres apprenables}
+\begin{itemize}
+    \item $\gamma$ (intercepte) : probabilité de base
+    \item $\lambda$ (pente) : influence de la distance
+\end{itemize}
+\end{block}
+\end{frame}
+
+%=================================================================
+\section{Optimisation et apprentissage}
+
+\begin{frame}{Fonction de perte}
+\begin{block}{Deux termes}
+$$\boxed{\mathcal L = \mathcal L_{BCE} + \lambda_{entropy}\,\mathcal L_{entropy}}$$
+\end{block}
+
+\begin{block}{1. Entropie croisée binaire (BCE)}
+$$\mathcal L_{BCE} = -\bigl[y\log\hat p + (1-y)\log(1-\hat p)\bigr]$$
+\begin{itemize}
+    \item Perte standard de prédiction de liens
+    \item Pondération pour déséquilibre des classes (ratio 3:1 négatif : positif)
+\end{itemize}
+\end{block}
+
+\begin{block}{2. Régularisation entropique}
+$$\mathcal L_{entropy} = -\sum_{i=1}^{9} w_i\log w_i$$
+\begin{itemize}
+    \item Empêche le modèle de se concentrer sur une seule caractéristique
+    \item Encourage la diversité des caractéristiques utilisées
+\end{itemize}
+\end{block}
+
+\begin{block}{Optimisation}
+\begin{itemize}
+    \item Optimiseur Adam (lr = 0,01)
+    \item Arrêt anticipé basé sur l'AUC de validation
+    \item Scheduler ReduceLROnPlateau
+\end{itemize}
+\end{block}
+\end{frame}
+
+%=================================================================
+\section{Comparaison avec les marches aléatoires}
+
+\begin{frame}{Complexité computationnelle}
+\begin{table}
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Aspect} & \textbf{Marches aléatoires} & \textbf{FastRP} \\
+ & \textbf{(Node2Vec)} & \textbf{(notre méthode)} \\
+\midrule
+Complexité temporelle & $O(rwl\,n)$ & $O(E\,d\,p)$ \\
+Mémoire & $O(rwl\,n)$ & $O(d\,p)$ \\
+Prétraitement & Génération des marches & Ops matricielles creuses \\
+Scalabilité & Faible (quadratique) & Excellente (linéaire) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{block}{Paramètres}
+\begin{itemize}
+    \item $r$ : marches par nœud (10-50)
+    \item $w$ : longueur de marche (80-100)
+    \item $l$ : époques d'entraînement ($\approx 100$)
+    \item $E$ : nombre d'arêtes, $d$ : dimension, $p$ : puissances
+\end{itemize}
+\end{block}
+
+\begin{alertblock}{Chiffres réels pour notre jeu de données}
+\begin{itemize}
+    \item Node2Vec : $\approx$28k × 10 × 80 × 100 = 2,24 G opérations
+    \item FastRP : $\approx$500k arêtes × 256 × 3 = 384 M opérations
+    \item \textbf{$\approx$6× plus rapide !}
+\end{itemize}
+\end{alertblock}
+\end{frame}
+
+%-------------------------------
+\begin{frame}{Bénéfices qualitatifs}
+\begin{block}{Pourquoi la projection aléatoire est-elle meilleure ?}
+\begin{enumerate}
+    \item \textbf{Préservation de la structure globale}
+    \begin{itemize}
+        \item Les marches sont locales (limitées par $w$)
+        \item Les puissances matricielles capturent la connectivité globale
+    \end{itemize}
+
+    \item \textbf{Relations multi-échelle}
+    \begin{itemize}
+        \item Puissances 1-2-3 : immédiat, communauté, domaine
+        \item Marches : voisinage de longueur fixe
+    \end{itemize}
+
+    \item \textbf{Caractéristiques déterministes}
+    \begin{itemize}
+        \item Pas de variance d'échantillonnage
+        \item Résultats reproductibles
+    \end{itemize}
+
+    \item \textbf{Garanties théoriques}
+    \begin{itemize}
+        \item Lemme de Johnson–Lindenstrauss
+    \end{itemize}
+
+    \item \textbf{Support hétérogène}
+    \begin{itemize}
+        \item Gestion naturelle de multiples types de relations
+    \end{itemize}
+\end{enumerate}
+\end{block}
+\end{frame}
+
+%=================================================================
+\section{Résultats et performances}
+
+\begin{frame}{Résultats de prédiction de liens}
+\begin{block}{Principaux chiffres}
+\begin{itemize}
+    \item \textbf{AUC entraînement :} 0,94
+    \item \textbf{AUC validation :} 0,94
+    \item \textbf{Temps d'entraînement :} 15 min (vs. heures pour les marches)
+\end{itemize}
+\end{block}
+
+\begin{block}{Importance des caractéristiques}
+\begin{center}
+\begin{tabular}{lr}
+\toprule
+\textbf{Type de relation} & \textbf{Poids} \\
+\midrule
+Conférences (ACA) & 70 \% \\
+Collaborations (AAA) & 25 \% \\
+Similarité thématique (ATA) & 5 \% \\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{block}
+
+\begin{block}{Impact du filtrage de nœuds}
+\begin{itemize}
+    \item Original : 28\,702 auteurs
+    \item Filtré (degré $\ge 5$) : 27\,821 auteurs
+    \item 881 nœuds « bruit » supprimés
+    \item Amélioration du clustering
+\end{itemize}
+\end{block}
+
+\textbf{Scalabilité :} croissance linéaire avec la taille du graphe.
+\end{frame}
+
+%-------------------------------
+\begin{frame}{Exemple concret}
+\begin{exampleblock}{Prédire une collaboration (Alice \& Bob)}
+\textbf{Étape 1 :} IDs : Alice = 1000, Bob = 1500\\
+\textbf{Étape 2 :} Extraire leurs embeddings\\
+\texttt{z\_alice = Z[1000, :]}\\
+\texttt{z\_bob = Z[1500, :]}\\[4pt]
+\textbf{Étape 3 :} Calculer la distance\\
+\texttt{distance\_sq = |z\_alice - z\_bob|**2}\\[4pt]
+\textbf{Étape 4 :} Probabilité de collaboration\\
+\texttt{proba = sigmoid(\gamma - \lambda \times distance\_sq)}\\[4pt]
+\textbf{Résultat :} 41\% de chance qu'Alice et Bob collaborent.
+\end{exampleblock}
+\end{frame}
+
+%=================================================================
+\section{Résumé comparatif}
+
+\begin{frame}{Avantages / inconvénients}
+\begin{block}{Projection aléatoire vs marches}
+\textbf{Avantages :}
+\begin{itemize}
+    \item[\checkmark] \textbf{Vitesse :} 6× plus rapide que Node2Vec
+    \item[\checkmark] \textbf{Mémoire :} usage constant
+    \item[\checkmark] \textbf{Qualité :} meilleure structure globale
+    \item[\checkmark] \textbf{Déterministe :} pas de variance d'échantillonnage
+    \item[\checkmark] \textbf{Scalable :} complexité linéaire
+    \item[\checkmark] \textbf{Interprétable :} poids des caractéristiques
+    \item[\checkmark] \textbf{Hétérogène :} support natif multi-relations
+\end{itemize}
+
+\textbf{Inconvénients potentiels :}
+\begin{itemize}
+    \item[!] \textbf{Complexité :} plus de paramètres ($\alpha$, $\beta$, puissances)
+    \item[!] \textbf{Maturité théorique :} moins étudié que les marches
+    \item[!] \textbf{Implémentation :} manipulation de matrices creuses
+\end{itemize}
+\end{block}
+
+\begin{alertblock}{En résumé}
+La projection aléatoire offre un meilleur compromis vitesse-qualité pour les graphes hétérogènes.
+\end{alertblock}
+\end{frame}
+
+%=================================================================
+\section{Points essentiels}
+
+\begin{frame}{À retenir}
+\begin{block}{1. Idée centrale}
+Projections aléatoires + puissances matricielles = embeddings efficaces.
+\end{block}
+
+\begin{block}{2. Fondement mathématique}
+Lemme de Johnson–Lindenstrauss.
+\end{block}
+
+\begin{block}{3. Innovation ingénierie}
+Calcul itératif évitant l'explosion mémoire : $\mathbf M \circ (\mathbf M \circ \mathbf R)$ plutôt que $\mathbf M^2 \circ \mathbf R$.
+\end{block}
+
+\begin{block}{4. Gains de performance}
+6× plus rapide que les marches aléatoires.
+\end{block}
+
+\begin{block}{5. Impact pratique}
+Applicable aux grands graphes hétérogènes réels.
+\end{block}
+
+\begin{alertblock}{Vue d'ensemble}
+La projection aléatoire rend l'embedding de graphes pratique à grande échelle.
+\end{alertblock}
+\end{frame}
+
+%=================================================================
+\begin{frame}{Merci !}
+\begin{block}{Code et implémentation}
+\begin{itemize}
+    \item Disponible sur GitHub : [Votre dépôt]
+    \item Implémentation Python (PyTorch)
+    \item Support CPU, CUDA, Apple Silicon
+\end{itemize}
+\end{block}
+
+\begin{block}{Fichiers clés}
+\begin{itemize}
+    \item \texttt{src/model.py} : implémentation Projection aléatoire
+    \item \texttt{src/main.py} : pipeline d'apprentissage
+    \item \texttt{scripts/plot\_umap.py} : visualisation
+\end{itemize}
+\end{block}
+
+\begin{block}{Essayez vous-même}
+\texttt{python src/main.py --epochs 30 --meta-paths AAA ACA ATA}
+\end{block}
+
+\begin{center}
+\Huge \textbf{Questions ?}
+\end{center}
+\end{frame}
+
+%=================================================================
+% Appendix
+\appendix
+
+\begin{frame}{Annexe : dimensions des matrices}
+\begin{block}{Données d'entrée}
+\begin{itemize}
+    \item Auteurs : 28\,702
+    \item Conférences : 20
+    \item Termes : 8\,920
+\end{itemize}
+\end{block}
+
+\begin{block}{Matrices de relations}
+\begin{itemize}
+    \item $\mathbf A_{AA}$ : 28\,702 × 28\,702 (creuse)
+    \item $\mathbf A_{AC}$ : 28\,702 × 20
+    \item $\mathbf A_{AT}$ : 28\,702 × 8\,920
+    \item $\mathbf A_{CA}$ : 20 × 28\,702
+    \item $\mathbf A_{TA}$ : 8\,920 × 28\,702
+\end{itemize}
+\end{block}
+
+\begin{block}{Matrices des méta-chemins}
+\begin{itemize}
+    \item $\mathbf M_{AAA}$, $\mathbf M_{ACA}$, $\mathbf M_{ATA}$ : 28\,702 × 28\,702
+\end{itemize}
+\end{block}
+
+\begin{block}{Caractéristiques}
+\begin{itemize}
+    \item Chaque $\mathbf U_i$ : 28\,702 × 256
+    \item Tenseur $\mathbf F$ : 9 × 28\,702 × 256
+    \item Embeddings finaux $\mathbf Z$ : 28\,702 × 256
+\end{itemize}
+\end{block}
+\end{frame}
+
+\begin{frame}{Annexe : usage mémoire}
+\begin{block}{Répartition}
+\begin{itemize}
+    \item Matrices creuses : $\approx$50 Mo
+    \item Tenseur de caractéristiques : $\approx$2,5 Go
+    \item Total : $\approx$3 Go (vs >50 Go approche naïve)
+\end{itemize}
+\end{block}
+
+\begin{block}{Trucs d'implémentation}
+\begin{itemize}
+    \item SciPy pour toutes les matrices creuses
+    \item Jamais de matérialisation de $\mathbf M^2$
+    \item Calcul itératif
+    \item Cache disque pour les méta-chemins
+    \item Accélération GPU hybride
+\end{itemize}
+\end{block}
+\end{frame}
+
+\begin{frame}{Visualisation des embeddings}
+\centering
+\includegraphics[width=0.9\linewidth]{figures/embedding.png}
+\end{frame}
+
+\end{document} 
