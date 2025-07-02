@@ -1,13 +1,44 @@
-# Cache directories
-matrix_cache/
-.venv/
-__pycache__/
+# Ignorer données brutes et caches
+/data/
+/matrix_cache/
+/splits/
+
+# Fichiers et répertoires de sortie
+/plots/
+/figures/
+
+# Checkpoints et embeddings
+*.pt
+*.pth
+
+# Fichiers LaTeX intermédiaires et PDF
+*.aux
+*.log
+*.nav
+*.out
+*.snm
+*.toc
+*.pdf
+*.tex
+
+# Fichiers Markdown de présentation
+FastRP_Presentation*.md
+presentation_slides.md
+FastRP_Presentation*.tex
+
+# Autres
+*.png
+*.jpg
+*.svg
+
+# Éditeurs/OS
+.DS_Store
+.idea/
+.vscode/
 
 # Python bytecode
 *.pyc
 
 # OS-specific
-.DS_Store
-
-# Embeddings output
-*.npy 
+.venv/
+__pycache__/ 

@@ -169,6 +169,13 @@ def main(args):
         device=model_device
     ).to(model_device)
 
+    # EXPÉRIMENTATION : désactiver la pente (lambda) et l'intercept (gamma)
+    model.slope.data.fill_(1.0)
+    model.intercept.data.fill_(0.0)
+    model.slope.requires_grad_(False)
+    model.intercept.requires_grad_(False)
+    print("[Expérience] Slope (lambda) fixé à 1.0 et intercept (gamma) fixé à 0.0 — non entraînables.")
+
     # Prepare training data: positive edges
     if args.edge_split:
         print(f"Loading edge split from {args.edge_split}")
