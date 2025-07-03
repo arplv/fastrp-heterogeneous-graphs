@@ -264,6 +264,15 @@ def main(args):
         scaler = StandardScaler()
         X_for_dr = scaler.fit_transform(embeddings)
         print("Embeddings standardised (zero mean / unit var per dimension) before PCA / UMAP.")
+    elif args.pca_preprocess == 'log':
+        # Shift embeddings to be non-negative, then apply log1p and z-score per dimension
+        shift = -np.min(embeddings) + 1e-6 if np.min(embeddings) <= 0 else 0.0
+        emb_shifted = embeddings + shift
+        emb_log = np.log1p(emb_shifted)
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+        X_for_dr = scaler.fit_transform(emb_log)
+        print(f"Embeddings log1p-transformed (shift={shift:.4g}) and standardised before PCA / UMAP.")
     else:
         X_for_dr = embeddings
         print("Embeddings fed to PCA / UMAP without additional normalisation.")
@@ -391,7 +400,7 @@ if __name__ == '__main__':
                         help="Optional comma-separated list of 1-based author IDs to annotate in the plot.")
     parser.add_argument('--output', type=Path, default='plots/umap_visualization.png',
                         help="Path to save the output plot.")
-    parser.add_argument('--pca-preprocess', type=str, default='l2', choices=['l2', 'standard', 'none'],
-                        help="Preprocessing applied to embeddings before PCA: 'l2' = row L2 normalisation (old default), 'standard' = per-dimension z-score, 'none' = raw embeddings.")
+    parser.add_argument('--pca-preprocess', type=str, default='l2', choices=['l2', 'standard', 'none', 'log'],
+                        help="Preprocessing before PCA: 'l2' row-wise L2, 'standard' per-dim z-score, 'log' = log(1+shift) then z-score, 'none' raw embeddings.")
     
     main(parser.parse_args()) 
