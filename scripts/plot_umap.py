@@ -252,7 +252,24 @@ def main(args):
               "Embeddings and labels may be mismatched.")
         return
 
-    # L2 normalize embeddings for cosine distance
+    # ------------------------------------------------------------------
+    # Pre-processing before dimensionality reduction
+    # ------------------------------------------------------------------
+
+    if args.pca_preprocess == 'l2':
+        X_for_dr = normalize(embeddings, norm='l2', axis=1)
+        print("Embeddings L2-normalised row-wise before PCA / UMAP (cosine equivalent).")
+    elif args.pca_preprocess == 'standard':
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+        X_for_dr = scaler.fit_transform(embeddings)
+        print("Embeddings standardised (zero mean / unit var per dimension) before PCA / UMAP.")
+    else:
+        X_for_dr = embeddings
+        print("Embeddings fed to PCA / UMAP without additional normalisation.")
+
+    # Re-use same matrix for both UMAP (after L2 norm for cosine) and PCA.
+    # For UMAP we keep using the default L2-normalized version to approximate cosine similarity.
     embeddings_norm = normalize(embeddings, norm='l2', axis=1)
 
     # --- 3. UMAP & PCA Projections ---
@@ -268,7 +285,7 @@ def main(args):
     print("Performing PCA projection...")
     pca = PCA(n_components=3)
     start_time = time.time()
-    embeddings_pca = pca.fit_transform(embeddings_norm)
+    embeddings_pca = pca.fit_transform(X_for_dr)
     end_time = time.time()
     explained_variance = pca.explained_variance_ratio_
     print(f"PCA projection took {end_time - start_time:.2f} seconds.")
@@ -374,5 +391,7 @@ if __name__ == '__main__':
                         help="Optional comma-separated list of 1-based author IDs to annotate in the plot.")
     parser.add_argument('--output', type=Path, default='plots/umap_visualization.png',
                         help="Path to save the output plot.")
+    parser.add_argument('--pca-preprocess', type=str, default='l2', choices=['l2', 'standard', 'none'],
+                        help="Preprocessing applied to embeddings before PCA: 'l2' = row L2 normalisation (old default), 'standard' = per-dimension z-score, 'none' = raw embeddings.")
     
     main(parser.parse_args()) 
