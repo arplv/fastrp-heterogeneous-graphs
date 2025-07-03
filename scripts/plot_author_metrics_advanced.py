@@ -88,6 +88,8 @@ def main():
     parser.add_argument("--embeddings", required=True, type=Path)
     parser.add_argument("--data-dir", default="data", type=Path)
     parser.add_argument("--output-dir", default="plots", type=Path)
+    parser.add_argument("--quantile-cut", type=float, default=0.05,
+                        help="Exclude authors below this lower and above (1-cut) upper quantile of the composite influence score.")
     args = parser.parse_args()
 
     out_dir = Path(args.output_dir)
@@ -122,6 +124,27 @@ def main():
     influence_z = np.mean([zscore(comp) for comp in influence_components], axis=0)
     metrics["influence_score"] = influence_z  # already standardized
 
+    # ----------------- Quantile filtering -----------------
+    if 0 < args.quantile_cut < 0.5:
+        low_q = np.quantile(influence_z, args.quantile_cut)
+        high_q = np.quantile(influence_z, 1 - args.quantile_cut)
+        keep_mask = (influence_z >= low_q) & (influence_z <= high_q)
+        print(f"Applying quantile filter: keeping {keep_mask.sum()} / {len(keep_mask)} authors (cut={args.quantile_cut})")
+
+        # Filter embeddings and all metric arrays
+        for k in list(metrics.keys()):
+            if k == "influence_score":
+                metrics[k] = metrics[k][keep_mask]
+            else:
+                metrics[k] = metrics[k][keep_mask]
+        influence_z = influence_z[keep_mask]
+
+        # Update E for PCA later
+        E = E[keep_mask]
+        E_norm = normalize(E, axis=1)
+    else:
+        keep_mask = slice(None)
+
     # Standardize all metrics (z-score) for colour scaling
     metrics_std = {k: zscore(v) for k, v in metrics.items() if k != "influence_score"}
 
@@ -142,7 +165,7 @@ def main():
     for r, (ix, iy) in enumerate(pairs):
         for c, m_name in enumerate(grid_metrics):
             ax = axes[r, c]
-            vals = metrics_std[m_name]
+            vals = metrics_std[m_name][keep_mask]
             sc = ax.scatter(E_3d[:, ix], E_3d[:, iy], c=vals, cmap="coolwarm", s=8, alpha=0.65)
             ax.set_xticks([])
             ax.set_yticks([])
