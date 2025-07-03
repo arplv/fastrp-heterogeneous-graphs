@@ -143,7 +143,7 @@ def main():
         E = E[keep_mask]
         E_norm = normalize(E, axis=1)
     else:
-        keep_mask = slice(None)
+        keep_mask = None
 
     # Standardize all metrics (z-score) for colour scaling
     metrics_std = {k: zscore(v) for k, v in metrics.items() if k != "influence_score"}
@@ -165,7 +165,7 @@ def main():
     for r, (ix, iy) in enumerate(pairs):
         for c, m_name in enumerate(grid_metrics):
             ax = axes[r, c]
-            vals = metrics_std[m_name][keep_mask]
+            vals = metrics_std[m_name]
             sc = ax.scatter(E_3d[:, ix], E_3d[:, iy], c=vals, cmap="coolwarm", s=8, alpha=0.65)
             ax.set_xticks([])
             ax.set_yticks([])
