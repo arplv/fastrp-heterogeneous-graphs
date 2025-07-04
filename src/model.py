@@ -43,7 +43,7 @@ def scipy_to_torch_sparse(matrix: sp.csr_matrix, device: torch.device) -> torch.
     return torch.sparse_coo_tensor(i, v, torch.Size(shape), device=device)
 
 class FastRPModel(nn.Module):
-    def __init__(self, n_authors: int, dim: int, meta_paths: List[str], relations: Dict[str, Dict[str, sp.csr_matrix]], num_powers: int, alpha: float, beta: float, s: int, device: str = 'cpu', apply_softmax: bool = True):
+    def __init__(self, n_authors: int, dim: int, meta_paths: List[str], relations: Dict[str, Dict[str, sp.csr_matrix]], num_powers: int, alpha: float, beta: float, s: int, device: str = 'cpu', apply_softmax: bool = True, log_transform: bool = False):
         super().__init__()
         self.device = torch.device(device)
         self.dim = dim
@@ -51,6 +51,7 @@ class FastRPModel(nn.Module):
         self.intercept = nn.Parameter(torch.tensor(0.0))
         self.slope = nn.Parameter(torch.tensor(1.0))
         self.apply_softmax = apply_softmax
+        self.log_transform = log_transform
         
         # --- Feature Generation (Efficient Pre-computation) ---
         # Create the initial random projection matrix.
@@ -90,6 +91,16 @@ class FastRPModel(nn.Module):
                 # The .toarray() call is memory-intensive but necessary here. The key efficiency
                 # gain is avoiding the (N, N) matrix construction and multiplication.
                 U_tensor = torch.from_numpy(U_curr_sparse.toarray()).float()
+
+                # Optional log standardisation to mitigate heavy-tailed counts
+                if self.log_transform:
+                    shift = (-U_tensor.min() + 1e-6) if torch.min(U_tensor) <= 0 else 0.0
+                    U_tensor = torch.log1p(U_tensor + shift)
+                    # Standard score per column (feature dim)
+                    mean = torch.mean(U_tensor, dim=0, keepdim=True)
+                    std = torch.std(U_tensor, dim=0, keepdim=True) + 1e-6
+                    U_tensor = (U_tensor - mean) / std
+
                 U_tensor = F.normalize(U_tensor, p=2, dim=1)
                 features_list.append(U_tensor)
                 

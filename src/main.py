@@ -166,7 +166,8 @@ def main(args):
         alpha=args.alpha,
         beta=args.beta,
         s=args.s,
-        device=model_device
+        device=model_device,
+        log_transform=args.log_transform
     ).to(model_device)
 
     # EXPÉRIMENTATION : désactiver la pente (lambda) et l'intercept (gamma)
@@ -496,6 +497,7 @@ if __name__ == '__main__':
     parser.add_argument('--save-final', action='store_true', help='Save embeddings and model from the final epoch (in addition to best model).')
     parser.add_argument('--final-embeddings-path', type=str, default='final_embeddings.pt', help='Path to save final epoch embeddings.')
     parser.add_argument('--final-model-path', type=str, default='final_model.pth', help='Path to save final epoch model checkpoint.')
+    parser.add_argument('--log-transform', action='store_true', help='Apply log transformation to the meta-path matrices.')
     
     args = parser.parse_args()
     main(args) 
