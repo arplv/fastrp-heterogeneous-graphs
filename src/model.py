@@ -47,12 +47,13 @@ class FastRPModel(nn.Module):
         super().__init__()
         self.device = torch.device(device)
         self.dim = dim
-        self.feature_weights = nn.Parameter(torch.ones(len(meta_paths), num_powers))
+        # Initialise weights with small random values so no single meta-path dominates at start
+        self.feature_weights = nn.Parameter(0.01 * torch.randn(len(meta_paths), num_powers))
         # Store flags
         self.log_transform = log_transform
 
-        # Fixed intercept and slope (not learnable)
-        self.register_buffer('intercept', torch.tensor(0.0))
+        # Learnable intercept, fixed unit slope
+        self.intercept = nn.Parameter(torch.tensor(0.0))
         self.register_buffer('slope', torch.tensor(1.0))
         
         # --- Feature Generation (Efficient Pre-computation on Global Graph) ---
