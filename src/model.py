@@ -52,9 +52,9 @@ class FastRPModel(nn.Module):
         # Store flags
         self.log_transform = log_transform
 
-        # Learnable intercept, fixed unit slope
-        self.intercept = nn.Parameter(torch.tensor(0.0))
-        self.register_buffer('slope', torch.tensor(1.0))
+        # Fixed intercept at 0, learnable (non-negative) slope
+        self.register_buffer('intercept', torch.tensor(0.0))
+        self.slope = nn.Parameter(torch.tensor(1.0))
         
         # --- Feature Generation (Efficient Pre-computation on Global Graph) ---
         # Create a global adjacency matrix for degree calculation by summing all relations
@@ -157,6 +157,6 @@ class FastRPModel(nn.Module):
         
         dist_sq = ((zi - zj) ** 2).sum(dim=1)
         
-        # Fixed slope = 1 and intercept = 0 ⇒ logits = -‖zi − zj‖²
-        logits = self.intercept - self.slope * dist_sq
+        slope = F.relu(self.slope)
+        logits = - slope * dist_sq
         return logits 
