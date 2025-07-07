@@ -130,7 +130,8 @@ def main(args):
         alpha=args.alpha,
         beta=args.beta,
         s=args.s,
-        device=model_device
+        device=model_device,
+        log_transform=args.log_transform
     ).to(model_device)
 
     # --- Prepare training data with balancing ---
@@ -233,7 +234,12 @@ def main(args):
     print(f"  Train positive edges: {train_pos_edge_index.size(1)}")
     print(f"  Validation positive edges: {val_pos_edge_index.size(1)}")
 
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    if args.optimizer == 'sgd':
+        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    elif args.optimizer == 'adam':
+        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    else:
+        raise ValueError(f"Unknown optimizer: {args.optimizer}")
     scheduler = ReduceLROnPlateau(optimizer, 'max', factor=0.5, patience=10)
     
     # Initialize metrics on the target device
@@ -439,6 +445,10 @@ if __name__ == '__main__':
     parser.add_argument('--edge-split', type=str, default=None, help='Path to the pre-computed edge split file.')
     parser.add_argument('--patience', type=int, default=20, help='Number of epochs to wait for validation AUC improvement before early stopping.')
     parser.add_argument('--plot-path', type=str, default='plots/training_metrics.png', help='Path to save the training metrics plot.')
+    parser.add_argument('--optimizer', type=str, choices=['sgd', 'adam'], default='adam', help='Optimizer to use for training.')
+    parser.add_argument('--momentum', type=float, default=0.9, help='Momentum for SGD optimizer.')
+    parser.add_argument('--weight-decay', type=float, default=0.0, help='Weight decay for SGD optimizer.')
+    parser.add_argument('--log-transform', action='store_true', help='Apply log transformation to the embedding before saving.')
     
     args = parser.parse_args()
     main(args) 

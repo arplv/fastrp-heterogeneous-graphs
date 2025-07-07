@@ -43,11 +43,14 @@ def scipy_to_torch_sparse(matrix: sp.csr_matrix, device: torch.device) -> torch.
     return torch.sparse_coo_tensor(i, v, torch.Size(shape), device=device)
 
 class FastRPModel(nn.Module):
-    def __init__(self, n_total: int, dim: int, meta_paths: List[str], relations: Dict[str, Dict[str, sp.csr_matrix]], num_powers: int, alpha: float, beta: float, s: int, device: str = 'cpu'):
+    def __init__(self, n_total: int, dim: int, meta_paths: List[str], relations: Dict[str, Dict[str, sp.csr_matrix]], num_powers: int, alpha: float, beta: float, s: int, device: str = 'cpu', log_transform: bool = False):
         super().__init__()
         self.device = torch.device(device)
         self.dim = dim
         self.feature_weights = nn.Parameter(torch.ones(len(meta_paths), num_powers))
+        # Store flags
+        self.log_transform = log_transform
+
         # Fixed intercept and slope (not learnable)
         self.register_buffer('intercept', torch.tensor(0.0))
         self.register_buffer('slope', torch.tensor(1.0))
@@ -89,6 +92,16 @@ class FastRPModel(nn.Module):
                     U_curr_sparse = hop_matrix @ U_curr_sparse
                 
                 U_tensor = torch.from_numpy(U_curr_sparse.toarray()).float()
+
+                # Optional heavy-tail mitigation
+                if self.log_transform:
+                    shift = (-U_tensor.min() + 1e-6) if torch.min(U_tensor) <= 0 else 0.0
+                    U_tensor = torch.log1p(U_tensor + shift)
+                    # Column-wise z-score
+                    mean = torch.mean(U_tensor, dim=0, keepdim=True)
+                    std  = torch.std(U_tensor,  dim=0, keepdim=True) + 1e-6
+                    U_tensor = (U_tensor - mean) / std
+
                 U_tensor = F.normalize(U_tensor, p=2, dim=1)
                 features_list.append(U_tensor)
                 
