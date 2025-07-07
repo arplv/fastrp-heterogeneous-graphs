@@ -199,7 +199,7 @@ def main(args):
         max_edges = max(e.size(1) for e in edges_by_target.values())
         print(f"Balancing all relations to {max_edges} edges each by oversampling.")
 
-        balanced_edges = []
+        balanced_edges_dict = {}
         for target, edges in edges_by_target.items():
             num_current_edges = edges.size(1)
             
@@ -210,29 +210,42 @@ def main(args):
             if num_current_edges < max_edges:
                 # Oversample with replacement
                 indices = torch.randint(0, num_current_edges, (max_edges,), device=edges.device)
-                balanced_edges.append(edges[:, indices])
+                balanced_edges_dict[target] = edges[:, indices]
                 print(f"  - Oversampled '{target}' to {max_edges} edges (from {num_current_edges})")
             else:
-                # This relation is already at max size, no sampling needed
-                balanced_edges.append(edges)
+                balanced_edges_dict[target] = edges
                 print(f"  - Using all {num_current_edges} edges for '{target}'")
         
-        if not balanced_edges:
+        if not balanced_edges_dict:
             print("Error: No edges to train on after balancing. Aborting.")
             return
 
-        all_pos_edges = torch.cat(balanced_edges, dim=1).to(model_device)
-        all_pos_edges_count = all_pos_edges.size(1)
+        # Split per relation
+        train_pos_edges_by_rel = {}
+        val_pos_edges_by_rel   = {}
+        all_pos_edges_count = 0
+        for rel, edges in balanced_edges_dict.items():
+            perm_rel = torch.randperm(edges.size(1))
+            val_size_rel = int(edges.size(1) * 0.1)
+            train_pos_edges_by_rel[rel] = edges[:, perm_rel[val_size_rel:]].to(model_device)
+            val_pos_edges_by_rel[rel]   = edges[:, perm_rel[:val_size_rel]].to(model_device)
+            all_pos_edges_count += edges.size(1)
 
-        # Simple random split of the now-balanced set of edges
-        perm = torch.randperm(all_pos_edges.size(1))
-        val_size = int(all_pos_edges.size(1) * 0.1) # 10% for validation
-        train_pos_edge_index = all_pos_edges[:, perm[val_size:]]
-        val_pos_edge_index = all_pos_edges[:, perm[:val_size]]
+        # For logging convenience create flat counts
+        train_pos_edge_index = torch.cat([e for e in train_pos_edges_by_rel.values()], dim=1)
+        val_pos_edge_index = torch.cat([e for e in val_pos_edges_by_rel.values()], dim=1)
 
     print(f"  Total positive edges after balancing: {all_pos_edges_count}")
     print(f"  Train positive edges: {train_pos_edge_index.size(1)}")
     print(f"  Validation positive edges: {val_pos_edge_index.size(1)}")
+
+    # Helper for relation-aware negative sampling
+    def sample_negatives_relation(src_type, dst_type, num_samples):
+        src_offset = node_offsets[src_type]
+        dst_offset = node_offsets[dst_type]
+        src_ids = torch.randint(0, node_counts[src_type], (num_samples,), device=model_device) + src_offset
+        dst_ids = torch.randint(0, node_counts[dst_type], (num_samples,), device=model_device) + dst_offset
+        return torch.stack([src_ids, dst_ids])
 
     if args.optimizer == 'sgd':
         optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
@@ -271,54 +284,52 @@ def main(args):
         model.train()
         
         # --- Training Phase ---
-        perm = torch.randperm(train_pos_edge_index.size(1), device=model_device)
         total_loss = 0.0
         for metric in metrics.values(): metric.reset()
 
-        for i in tqdm(range(0, train_pos_edge_index.size(1), args.batch_size), desc=f"Epoch {epoch+1} [Train]"):
-            batch_indices = perm[i:i+args.batch_size]
-            pos_batch = train_pos_edge_index[:, batch_indices]
-            
-            neg_batch = negative_sampling(
-                edge_index=train_pos_edge_index, # Sample negatives from the whole graph
-                num_nodes=n_total,
-                num_neg_samples=pos_batch.size(1) * args.neg_samples
-            )
+        # Relation-aware batches
+        for rel, pos_edges in train_pos_edges_by_rel.items():
+            src_type, dst_type = rel.split('-')
+            perm_rel = torch.randperm(pos_edges.size(1), device=model_device)
+            for i in tqdm(range(0, pos_edges.size(1), args.batch_size), desc=f"Epoch {epoch+1} [Train {rel}]"):
+                batch_indices = perm_rel[i:i+args.batch_size]
+                pos_batch = pos_edges[:, batch_indices]
 
-            idx_i = torch.cat([pos_batch[0], neg_batch[0]])
-            idx_j = torch.cat([pos_batch[1], neg_batch[1]])
-            labels = torch.cat([
-                torch.ones(pos_batch.size(1)), 
-                torch.zeros(neg_batch.size(1))
-            ]).to(model_device)
+                num_neg = pos_batch.size(1) * args.neg_samples
+                neg_batch = sample_negatives_relation(src_type, dst_type, num_neg)
 
-            optimizer.zero_grad()
-            logits = model(idx_i, idx_j)
-            
-            # Use weighted BCE loss to handle class imbalance
-            pos_weight = torch.tensor([args.neg_samples], device=model_device)
-            bce_loss = F.binary_cross_entropy_with_logits(logits, labels, pos_weight=pos_weight)
-            
-            # Optional L2 regularization on raw feature weights (if lambda > 0)
-            if args.lambda_entropy > 0:
-                weight_reg = torch.sum(model.feature_weights ** 2)
-                loss = bce_loss + args.lambda_entropy * weight_reg
-            else:
-                loss = bce_loss
-            
-            loss.backward()
-            optimizer.step()
+                idx_i = torch.cat([pos_batch[0], neg_batch[0]])
+                idx_j = torch.cat([pos_batch[1], neg_batch[1]])
+                labels = torch.cat([
+                    torch.ones(pos_batch.size(1), device=model_device),
+                    torch.zeros(num_neg, device=model_device)
+                ])
 
-            total_loss += loss.item()
-            
-            # Update all train metrics
-            metrics['train_auroc'].update(logits, labels)
-            metrics['train_acc'].update(logits, labels)
-            metrics['train_precision'].update(logits, labels)
-            metrics['train_recall'].update(logits, labels)
-            metrics['train_f1'].update(logits, labels)
+                optimizer.zero_grad()
+                logits = model(idx_i, idx_j)
 
-        avg_loss = total_loss / (len(range(0, train_pos_edge_index.size(1), args.batch_size)))
+                pos_weight = torch.tensor([args.neg_samples], device=model_device)
+                bce_loss = F.binary_cross_entropy_with_logits(logits, labels, pos_weight=pos_weight)
+
+                if args.lambda_entropy > 0:
+                    weight_reg = torch.sum(model.feature_weights ** 2)
+                    loss = bce_loss + args.lambda_entropy * weight_reg
+                else:
+                    loss = bce_loss
+
+                loss.backward()
+                optimizer.step()
+
+                total_loss += loss.item()
+
+                # Update metrics
+                metrics['train_auroc'].update(logits, labels)
+                metrics['train_acc'].update(logits, labels)
+                metrics['train_precision'].update(logits, labels)
+                metrics['train_recall'].update(logits, labels)
+                metrics['train_f1'].update(logits, labels)
+
+        avg_loss = total_loss / len(train_pos_edges_by_rel)
         metrics_history['train_loss'].append(avg_loss)
         metrics_history['train_auc'].append(metrics['train_auroc'].compute().item())
         metrics_history['train_acc'].append(metrics['train_acc'].compute().item())
@@ -335,24 +346,27 @@ def main(args):
         metrics['val_recall'].reset()
         metrics['val_f1'].reset()
         with torch.no_grad():
-            for i in tqdm(range(0, val_pos_edge_index.size(1), args.batch_size), desc=f"Epoch {epoch+1} [Val]"):
-                pos_batch = val_pos_edge_index[:, i:i+args.batch_size]
-                neg_batch = negative_sampling(
-                    edge_index=train_pos_edge_index, # IMPORTANT: still sample negatives from the whole graph space
-                    num_nodes=n_total,
-                    num_neg_samples=pos_batch.size(1) * args.neg_samples
-                )
-                idx_i = torch.cat([pos_batch[0], neg_batch[0]])
-                idx_j = torch.cat([pos_batch[1], neg_batch[1]])
-                labels = torch.cat([torch.ones(pos_batch.size(1)), torch.zeros(neg_batch.size(1))]).to(model_device)
-                
-                logits = model(idx_i, idx_j)
-                # Update all val metrics
-                metrics['val_auroc'].update(logits, labels)
-                metrics['val_acc'].update(logits, labels)
-                metrics['val_precision'].update(logits, labels)
-                metrics['val_recall'].update(logits, labels)
-                metrics['val_f1'].update(logits, labels)
+            for rel, pos_edges in val_pos_edges_by_rel.items():
+                src_type, dst_type = rel.split('-')
+                for i in tqdm(range(0, pos_edges.size(1), args.batch_size), desc=f"Epoch {epoch+1} [Val {rel}]"):
+                    pos_batch = pos_edges[:, i:i+args.batch_size]
+                    num_neg = pos_batch.size(1) * args.neg_samples
+                    neg_batch = sample_negatives_relation(src_type, dst_type, num_neg)
+
+                    idx_i = torch.cat([pos_batch[0], neg_batch[0]])
+                    idx_j = torch.cat([pos_batch[1], neg_batch[1]])
+                    labels = torch.cat([
+                        torch.ones(pos_batch.size(1), device=model_device),
+                        torch.zeros(num_neg, device=model_device)
+                    ])
+
+                    logits = model(idx_i, idx_j)
+
+                    metrics['val_auroc'].update(logits, labels)
+                    metrics['val_acc'].update(logits, labels)
+                    metrics['val_precision'].update(logits, labels)
+                    metrics['val_recall'].update(logits, labels)
+                    metrics['val_f1'].update(logits, labels)
         
         epoch_val_auc = metrics['val_auroc'].compute().item()
         metrics_history['val_auc'].append(epoch_val_auc)
