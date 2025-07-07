@@ -19,6 +19,13 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import normalize
 from adjustText import adjust_text
 
+import sys
+# Ensure project root is on PYTHONPATH so that `import src.*` works when the script
+# is executed from any location.
+project_root = Path(__file__).resolve().parents[1]
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 from src.data_loader import load_author_mappings, load_dictionary, load_edge_list
 
 def load_area_names(path: Path) -> dict[str, str]:
