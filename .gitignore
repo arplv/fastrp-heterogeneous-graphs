@@ -4,7 +4,6 @@
 /splits/
 
 # Fichiers et répertoires de sortie
-/plots/
 /figures/
 
 # Checkpoints et embeddings
@@ -30,6 +29,10 @@ FastRP_Presentation*.tex
 *.png
 *.jpg
 *.svg
+
+# Allow plot outputs to be committed
+!plots/
+!plots/**
 
 # Éditeurs/OS
 .DS_Store

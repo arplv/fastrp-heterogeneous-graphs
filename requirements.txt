@@ -9,3 +9,4 @@ matplotlib
 torch-geometric
 torchmetrics
 adjustText 
+networkx
