@@ -134,6 +134,43 @@ def load_data(data_dir: Union[str, Path] = 'data'):
         if "T" not in relations: relations["T"] = {}
         relations["T"]["C"] = relations["C"]["T"].T.tocsr()
 
+    # --- Derive C-C & T-T co-occurrence relations via shared authors -------------------------
+    # This allows training on C-C and T-T links without dedicated edge files.
+    # An edge (u, v) is added if two conferences (or terms) share at least one common author.
+
+    # Conferences that share authors:  C-A  (C×A)  →  C-C  = C-A · A-C  (C×C)
+    if "C" in relations and "A" in relations["C"]:
+        print("Building C-C co-occurrence graph (shared authors)…")
+        CA = relations["C"]["A"]             # shape (n_confs, n_authors)
+        # Sparse boolean product; result counts shared authors per conference pair
+        CC_cooc = (CA @ CA.T).tocsr()
+        CC_cooc.setdiag(0)                      # remove self-loops (they will be re-added later)
+        # Binarise: keep 1 where count > 0
+        CC_cooc.data = np.ones_like(CC_cooc.data, dtype=np.float32)
+
+        if "C" not in relations:
+            relations["C"] = {}
+        # If a C-C relation already exists, sum the matrices (logical OR for binary data)
+        if "C" in relations["C"]:
+            relations["C"]["C"] = (relations["C"]["C"] + CC_cooc).tocsr()
+        else:
+            relations["C"]["C"] = CC_cooc
+
+    # Terms that share authors:  T-A (T×A) → T-T = T-A · A-T  (T×T)
+    if "T" in relations and "A" in relations["T"]:
+        print("Building T-T co-occurrence graph (shared authors)…")
+        TA = relations["T"]["A"]             # shape (n_terms, n_authors)
+        TT_cooc = (TA @ TA.T).tocsr()
+        TT_cooc.setdiag(0)
+        TT_cooc.data = np.ones_like(TT_cooc.data, dtype=np.float32)
+
+        if "T" not in relations:
+            relations["T"] = {}
+        if "T" in relations["T"]:
+            relations["T"]["T"] = (relations["T"]["T"] + TT_cooc).tocsr()
+        else:
+            relations["T"]["T"] = TT_cooc
+
     # --- Add self-loops to all node types to ensure equal treatment ---
     # Author self-loops
     if "A" in relations and "A" in relations["A"]:
