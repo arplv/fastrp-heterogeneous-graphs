@@ -48,8 +48,9 @@ class FastRPModel(nn.Module):
         self.device = torch.device(device)
         self.dim = dim
         self.feature_weights = nn.Parameter(torch.ones(len(meta_paths), num_powers))
-        self.intercept = nn.Parameter(torch.tensor(0.0))
-        self.slope = nn.Parameter(torch.tensor(1.0))
+        # Fixed intercept and slope (not learnable)
+        self.register_buffer('intercept', torch.tensor(0.0))
+        self.register_buffer('slope', torch.tensor(1.0))
         
         # --- Feature Generation (Efficient Pre-computation on Global Graph) ---
         # Create a global adjacency matrix for degree calculation by summing all relations
@@ -130,7 +131,8 @@ class FastRPModel(nn.Module):
 
     def _mixed_embedding(self):
         # weights: (n_paths, n_powers) -> flatten -> (F)
-        w = F.softmax(self.feature_weights.flatten(), dim=0)
+        # Use raw (unnormalized) feature weights – no softmax
+        w = self.feature_weights.flatten()
         # einsum: w_f * X_fnd -> nd
         return torch.einsum('f,fnd->nd', w, self.features)
 
@@ -141,7 +143,6 @@ class FastRPModel(nn.Module):
         
         dist_sq = ((zi - zj) ** 2).sum(dim=1)
         
-        # Enforce non-negative slope for stability. A negative slope is physically meaningless.
-        slope = F.relu(self.slope)
-        logits = self.intercept - slope * dist_sq
+        # Fixed slope = 1 and intercept = 0 ⇒ logits = -‖zi − zj‖²
+        logits = self.intercept - self.slope * dist_sq
         return logits 

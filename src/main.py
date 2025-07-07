@@ -293,10 +293,12 @@ def main(args):
             pos_weight = torch.tensor([args.neg_samples], device=model_device)
             bce_loss = F.binary_cross_entropy_with_logits(logits, labels, pos_weight=pos_weight)
             
-            weights_softmax = F.softmax(model.feature_weights, dim=1)
-            entropy = -torch.sum(weights_softmax * torch.log(weights_softmax + 1e-7))
-            
-            loss = bce_loss + args.lambda_entropy * entropy
+            # Optional L2 regularization on raw feature weights (if lambda > 0)
+            if args.lambda_entropy > 0:
+                weight_reg = torch.sum(model.feature_weights ** 2)
+                loss = bce_loss + args.lambda_entropy * weight_reg
+            else:
+                loss = bce_loss
             
             loss.backward()
             optimizer.step()
@@ -359,9 +361,9 @@ def main(args):
         print(f"  Val Accuracy: {metrics_history['val_acc'][-1]:.4f} | Val Precision: {metrics_history['val_precision'][-1]:.4f} | Val Recall: {metrics_history['val_recall'][-1]:.4f} | Val F1: {metrics_history['val_f1'][-1]:.4f}")
 
         with torch.no_grad():
-            weights_softmax = F.softmax(model.feature_weights.flatten(), dim=0).cpu().numpy()
+            raw_weights = model.feature_weights.flatten().cpu().numpy()
             print(f"  Slope: {model.slope.item():.4f} | Intercept: {model.intercept.item():.4f}")
-            print(f"  Feature Weights (softmax): {np.array2string(weights_softmax, precision=4, suppress_small=True)}")
+            print(f"  Feature Weights (raw): {np.array2string(raw_weights, precision=4, suppress_small=True)}")
 
         if epoch_val_auc > best_val_auc:
             best_val_auc = epoch_val_auc
