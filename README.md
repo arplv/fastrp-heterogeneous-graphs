@@ -36,8 +36,8 @@ First, clone the repository and set up the Python environment.
 
 ```bash
 # Clone the repo
-git clone <your-repo-url>
-cd <repo-name>
+git clone https://github.com/arplv/fastrp-heterogeneous-graphs/
+cd fastrp-heterogeneous-graphs
 
 # Create and activate a virtual environment
 python3 -m venv .venv
